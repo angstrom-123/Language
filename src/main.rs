@@ -182,15 +182,14 @@ pub fn simulate(src_path: String, src_code: String) {
             ExprType::Program => {}, // Don't need to do anything for this node
             ExprType::Literal => {
                 let val: i64 = node.tok.val_str().parse().expect("Error: Failed to parse string as int");
-                eprintln!("Literal");
-                eprintln!("    Push {}", val);
                 stack.push(val);
+            },
+            ExprType::DebugDump => {
+                let val: i64 = stack.pop().expect("Error: Failed to pop stack");
+                println!("{}", val);
             },
             ExprType::Return => {
                 let val: i64 = stack.pop().expect("Error: Failed to pop stack");
-                eprintln!("Return");
-                eprintln!("    Pop {}", val);
-                eprintln!("    Exit");
                 exit(val.try_into().expect("Error: Failed to convert i64 to i32"));
             },
             ExprType::BinOp => {
@@ -198,37 +197,21 @@ pub fn simulate(src_path: String, src_code: String) {
                     TokenType::OpPlus => {
                         let val_a: i64 = stack.pop().expect("Error: Failed to pop stack");
                         let val_b: i64 = stack.pop().expect("Error: Failed to pop stack");
-                        eprintln!("Plus");
-                        eprintln!("    Pop {}", val_a);
-                        eprintln!("    Pop {}", val_b);
-                        eprintln!("    Push {} + {}", val_a, val_b);
                         stack.push(val_a + val_b);
                     },
                     TokenType::OpMinus => {
-                        eprintln!("Minus");
                         let val_a: i64 = stack.pop().expect("Error: Failed to pop stack");
                         let val_b: i64 = stack.pop().expect("Error: Failed to pop stack");
-                        eprintln!("    Pop {}", val_a);
-                        eprintln!("    Pop {}", val_b);
-                        eprintln!("    Push {} - {}", val_b, val_a);
                         stack.push(val_b - val_a);
                     },
                     TokenType::OpMul => {
-                        eprintln!("Mul");
                         let val_a: i64 = stack.pop().expect("Error: Failed to pop stack");
                         let val_b: i64 = stack.pop().expect("Error: Failed to pop stack");
-                        eprintln!("    Pop {}", val_a);
-                        eprintln!("    Pop {}", val_b);
-                        eprintln!("    Push {} * {}", val_a, val_b);
                         stack.push(val_a * val_b);
                     },
                     TokenType::OpDiv => {
-                        eprintln!("Div");
                         let val_a: i64 = stack.pop().expect("Error: Failed to pop stack");
                         let val_b: i64 = stack.pop().expect("Error: Failed to pop stack");
-                        eprintln!("    Pop {}", val_a);
-                        eprintln!("    Pop {}", val_b);
-                        eprintln!("    Push {} / {}", val_b, val_a);
                         stack.push(val_b / val_a);
                     },
                     _ => unimplemented!("Simulating other bin ops"),
