@@ -16,7 +16,7 @@ pub enum TokenType {
     OpenScope,
     CloseScope,
     KeywordFunctionDecl,
-    KeywordReturn,
+    KeywordExit,
     KeywordDebugDump,
     Identifier,
     LiteralInt,

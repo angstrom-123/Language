@@ -148,7 +148,7 @@ impl Lexer {
                         "<="     => tok.kind = TokenType::LessEqual,
                         "and"    => tok.kind = TokenType::LogicalAnd,
                         "or"     => tok.kind = TokenType::LogicalOr,
-                        "return" => tok.kind = TokenType::KeywordReturn,
+                        "exit"   => tok.kind = TokenType::KeywordExit,
                         "func"   => tok.kind = TokenType::KeywordFunctionDecl,
                         "dump"   => tok.kind = TokenType::KeywordDebugDump,
                         _ => { // Then match variable contents of words

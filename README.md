@@ -1,22 +1,29 @@
 # Language (Pending a Better Name)
-My attempt at writing a programming language in Rust.
-This language will support compilation to x86_64 assembly on Linux and it will 
-support interpretation.
+My attempt at writing a compiled programming language in Rust for x86_64 Linux.
+This language compiles to assembly, assembles with nasm, and 
+links with ld into a native executable.
 
 ## Usage
 ### Compile the Program
 ```
-cargo run com <file_path>
+cargo run <file_path> <flags>
 ```
+> [!NOTE}
+> Currently, compiled files are placed in the project root and named "output".
 
-Then the executable will be placed in the project root, named 'output'.
+| Flag         | Shorthand | Meaning               |
+| ------------ | --------- | --------------------- |
+| --parse-tree | -pt       | Print parse tree      |
+| --assembly   | -a        | Keep intermediate asm |
+| --tokens     | -t        | Print lexed tokens    |
+| --run        | -r        | Run after compiling   |
 
-### Interpret (Simulate) the Program
-```
-cargo run sim <file_path>
-```
+## Examples
+An examples folder is included with the project showcasing the language features 
+and giving real syntax examples. Combined with the listed features below, this 
+should be enough to get a basic grasp on the syntax.
 
-## Features
+## Language Features
 ### Keywords
 #### Debug Dump
 Prints a number to the console for debugging.
@@ -24,34 +31,22 @@ Prints a number to the console for debugging.
 dump <int>;
 ```
 
-#### Return
+#### Exit
 Exits the program with a provided exit code.
 ```
-return <int>;
+exit <int>;
 ```
 
-### Arithmetic Operators
-#### Addition
+#### Function Declaration
+Declares a new named funcion.
 ```
-<int> + <int>
-```
-
-#### Subtraction
-```
-<int> - <int>
+func <function_name> {
+    <body>
+}
 ```
 
-#### Multiplication
+#### Function Call
+Calls a previously declared funcion.
 ```
-<int> * <int>
-```
-
-#### Integer Division
-```
-<int> / <int>
-```
-
-#### Parens
-```
-2 * (3 + 4)
+<function_name>();
 ```

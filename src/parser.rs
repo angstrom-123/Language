@@ -7,8 +7,9 @@ use crate::lexer::Lexer;
 #[derive(Clone)]
 pub enum NodeType {
     Program,
-    Return,
+    Exit,
     FuncDecl,
+    FuncCall,
     DebugDump,
     BinOp,
     UnOp,
@@ -42,9 +43,9 @@ impl ParseNode {
         }
     }
 
-    fn new_return(tok: Token, rhs: ParseNode) -> Self {
+    fn new_exit(tok: Token, rhs: ParseNode) -> Self {
         ParseNode {
-            kind: NodeType::Return,
+            kind: NodeType::Exit,
             tok,
             children: vec![rhs],
         }
@@ -89,6 +90,14 @@ impl ParseNode {
             children: body,
         }
     }
+
+    fn new_func_call(tok: Token) -> Self {
+        ParseNode {
+            kind: NodeType::FuncCall,
+            tok,
+            children: vec![],
+        }
+    }
 }
 
 pub struct ParseTree {
@@ -111,11 +120,7 @@ impl ParseTree {
         self.root.dump(0);
     }
 
-    pub fn traverse(&mut self, res: &mut Vec<ParseNode>) {
-        self.post_order(self.root.clone(), res);
-    }
-
-    fn post_order(&mut self, curr: ParseNode, res: &mut Vec<ParseNode>) {
+    pub fn post_order(&self, curr: ParseNode, res: &mut Vec<ParseNode>) {
         for node in &curr.children {
             self.post_order(node.clone(), res);
         }
@@ -172,13 +177,13 @@ impl ParseTree {
     fn parse_statement(&mut self, lexer: &mut Lexer) -> ParseNode {
         let tok: Token = lexer.consume_token();
         match tok.kind {
-            TokenType::KeywordReturn => {
+            TokenType::KeywordExit => {
                 let expression: ParseNode = self.parse_expression(lexer);
                 let next_tok: Token = lexer.consume_token();
                 if next_tok.kind != TokenType::End {
                     panic!("{} Error: Expected `;` but got `{}`", next_tok.pos, next_tok.val_str());
                 }
-                ParseNode::new_return(tok, expression)
+                ParseNode::new_exit(tok, expression)
             },
             TokenType::KeywordDebugDump => {
                 let expression: ParseNode = self.parse_expression(lexer);
@@ -206,6 +211,27 @@ impl ParseTree {
                 }
                 lexer.consume_token();
                 ParseNode::new_func_decl(name_tok, body)
+            },
+            TokenType::Identifier => {
+                let mut next_tok: Token = lexer.consume_token();
+                match next_tok.kind {
+                    TokenType::OpenParen => {
+                        next_tok = lexer.consume_token();
+                        if next_tok.kind != TokenType::CloseParen {
+                            panic!("{} Error: Expected `)` but got `{}`", next_tok.pos, next_tok.val_str());
+                        }
+                        
+                        next_tok = lexer.consume_token();
+                        if next_tok.kind != TokenType::End {
+                            panic!("{} Error: Expected `; but got `{}`", next_tok.pos, next_tok.val_str());
+                        }
+
+                        ParseNode::new_func_call(tok)
+                    },
+                    _ => {
+                        panic!("{} Error: Unexpected identifier `{}`", tok.pos, tok.val_str());
+                    }
+                }
             },
             _ => panic!("{} Error: Unknown statement `{}`", tok.pos, tok.val_str()),
         }

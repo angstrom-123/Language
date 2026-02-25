@@ -2,11 +2,11 @@ use std::env;
 use std::fs;
 use std::io::Write;
 use std::process::Command;
-use std::process::exit;
 use crate::definitions::TokenType;
 use crate::lexer::Lexer;
 use crate::parser::NodeType;
 use crate::parser::ParseNode;
+use crate::parser::ParseTree;
 
 pub mod definitions;
 pub mod lexer;
@@ -30,11 +30,10 @@ pub mod tests {
             compile(src_path.to_string(), src.clone(), vec![]);
             let run = Command::new("./output").output().expect("Error: Failed to run executable");
             let stdout = String::from_utf8(run.stdout).expect("Error: Failed to convert stdout to string");
-            assert_eq!(exp, stdout, "Error: Unexpected Program output.\nExpected:\n{}\n\nGot:\n{}", exp, stdout);
+            assert_eq!(exp, stdout, "{} Error: Unexpected Program output.\nExpected:\n{}\n\nGot:\n{}", src_path, exp, stdout);
         }
     }
 }
-
 
 #[derive(PartialEq)]
 enum Flag {
@@ -44,7 +43,7 @@ enum Flag {
     Run
 }
 
-fn generate_nasm_x86(out_path: String, nodes: Vec<ParseNode>) -> std::io::Result<()> {
+fn generate_nasm_x86(out_path: String, ast: &mut ParseTree) -> std::io::Result<()> {
     let mut f = fs::File::create(out_path)?;
     writeln!(f, "; --- Header ---")?;
     writeln!(f, "global _start")?;
@@ -77,79 +76,105 @@ fn generate_nasm_x86(out_path: String, nodes: Vec<ParseNode>) -> std::io::Result
     writeln!(f, "    syscall")?;
     writeln!(f, "    add rsp, 40")?;
     writeln!(f, "    ret")?;
-    writeln!(f, "_start:")?;
-    for node in nodes {
-        match node.kind {
-            NodeType::Program => {}, // Don't need to do anything for this node
+
+    for statement in &ast.root.children {
+        eprintln!("Statement: {} ({:?}", statement.tok.val_str(), statement.kind);
+        match statement.kind {
             NodeType::FuncDecl => {
-                writeln!(f, "; --- FuncDecl {} ---", node.tok.val_str())?;
-                writeln!(f, "{}:", node.tok.val_str())?;
-            },
-            NodeType::Literal => {
-                writeln!(f, "; --- Literal {} ---", node.tok.val_str())?;
-                writeln!(f, "    mov rax, {}", node.tok.val_str())?;
-                writeln!(f, "    push rax")?;
-            },
-            NodeType::Return => {
-                writeln!(f, "; --- Return ---")?;
-                writeln!(f, "    pop rdi")?;
-                writeln!(f, "    mov rax, 60")?;
-                writeln!(f, "    syscall")?;
-            },
-            NodeType::DebugDump => {
-                writeln!(f, "; --- DebugDump ---")?;
-                writeln!(f, "    pop rdi")?;
-                writeln!(f, "    call dump")?;
-            },
-            NodeType::UnOp => {
-                match node.tok.kind {
-                    TokenType::OpMinus => {
-                        writeln!(f, "; --- UnOp::OpMinus ---")?;
-                        writeln!(f, "    pop rax")?;
-                        writeln!(f, "    neg rax")?;
-                        writeln!(f, "    push rax")?;
-                    },
-                    _ => panic!("Error: Unknown unary operator kind `{:?}`", node.tok.kind)
-                }
-            },
-            NodeType::BinOp => {
-                match node.tok.kind {
-                    TokenType::OpPlus => {
-                        writeln!(f, "; --- BinOp::OpPlus ---")?;
-                        writeln!(f, "    pop rax")?;
-                        writeln!(f, "    pop rbx")?;
-                        writeln!(f, "    add rax, rbx")?;
-                        writeln!(f, "    push rax")?;
-                    },
-                    TokenType::OpMinus => {
-                        writeln!(f, "; --- BinOp::OpMinus---")?;
-                        writeln!(f, "    pop rax")?;
-                        writeln!(f, "    pop rbx")?;
-                        writeln!(f, "    sub rbx, rax")?;
-                        writeln!(f, "    push rbx")?;
-                    },
-                    TokenType::OpMul => {
-                        writeln!(f, "; --- BinOp::OpMul ---")?;
-                        writeln!(f, "    pop rax")?;
-                        writeln!(f, "    pop rbx")?;
-                        writeln!(f, "    imul rax, rbx")?;
-                        writeln!(f, "    push rax")?;
-                    },
-                    TokenType::OpDiv => {
-                        writeln!(f, "; --- BinOp::OpDiv ---")?;
-                        writeln!(f, "    pop rcx")?;
-                        writeln!(f, "    pop rax")?;
-                        writeln!(f, "    xor rdx, rdx")?;
-                        writeln!(f, "    idiv rcx")?;
-                        writeln!(f, "    push rax")?;
-                    },
-                    _ => unimplemented!("Generating assembly for other bin ops"),
+                writeln!(f, "; --- FuncDecl {} ---", statement.tok.val_str())?;
+                writeln!(f, "{}:", statement.tok.val_str())?;
+            }
+            _ => panic!("{} Error: Invalid top level statement `{}`", statement.tok.pos, statement.tok.val_str())
+        }
+
+        let mut nodes: Vec<ParseNode> = Vec::new();
+        ast.post_order(statement.clone(), &mut nodes);
+        nodes.pop();
+        for node in nodes {
+            match node.kind {
+                NodeType::FuncCall => {
+                    writeln!(f, "; --- FuncCall {} ---", node.tok.val_str())?;
+                    writeln!(f, "    call {}", node.tok.val_str())?;
+                },
+                NodeType::Literal => {
+                    writeln!(f, "; --- Literal {} ---", node.tok.val_str())?;
+                    writeln!(f, "    mov rax, {}", node.tok.val_str())?;
+                    writeln!(f, "    push rax")?;
+                },
+                NodeType::Exit => {
+                    writeln!(f, "; --- Exit ---")?;
+                    writeln!(f, "    pop rdi")?;
+                    writeln!(f, "    mov rax, 60")?;
+                    writeln!(f, "    syscall")?;
+                },
+                NodeType::DebugDump => {
+                    writeln!(f, "; --- DebugDump ---")?;
+                    writeln!(f, "    pop rdi")?;
+                    writeln!(f, "    call dump")?;
+                },
+                NodeType::UnOp => {
+                    match node.tok.kind {
+                        TokenType::OpMinus => {
+                            writeln!(f, "; --- UnOp::OpMinus ---")?;
+                            writeln!(f, "    pop rax")?;
+                            writeln!(f, "    neg rax")?;
+                            writeln!(f, "    push rax")?;
+                        },
+                        _ => panic!("Error: Unknown unary operator kind `{:?}`", node.tok.kind)
+                    }
+                },
+                NodeType::BinOp => {
+                    match node.tok.kind {
+                        TokenType::OpPlus => {
+                            writeln!(f, "; --- BinOp::OpPlus ---")?;
+                            writeln!(f, "    pop rax")?;
+                            writeln!(f, "    pop rbx")?;
+                            writeln!(f, "    add rax, rbx")?;
+                            writeln!(f, "    push rax")?;
+                        },
+                        TokenType::OpMinus => {
+                            writeln!(f, "; --- BinOp::OpMinus---")?;
+                            writeln!(f, "    pop rax")?;
+                            writeln!(f, "    pop rbx")?;
+                            writeln!(f, "    sub rbx, rax")?;
+                            writeln!(f, "    push rbx")?;
+                        },
+                        TokenType::OpMul => {
+                            writeln!(f, "; --- BinOp::OpMul ---")?;
+                            writeln!(f, "    pop rax")?;
+                            writeln!(f, "    pop rbx")?;
+                            writeln!(f, "    imul rax, rbx")?;
+                            writeln!(f, "    push rax")?;
+                        },
+                        TokenType::OpDiv => {
+                            writeln!(f, "; --- BinOp::OpDiv ---")?;
+                            writeln!(f, "    pop rcx")?;
+                            writeln!(f, "    pop rax")?;
+                            writeln!(f, "    xor rdx, rdx")?;
+                            writeln!(f, "    idiv rcx")?;
+                            writeln!(f, "    push rax")?;
+                        },
+                        _ => unimplemented!("Generating assembly for other bin ops"),
+                    }
+                },
+                _ => {
+                    eprintln!("Type: {:?}", node.kind);
+                    panic!("{} Error: Invalid node in statement `{}`", node.tok.pos, node.tok.val_str())
                 }
             }
+        }
+
+        match statement.kind {
+            NodeType::FuncDecl => {
+                writeln!(f, "; --- Implicit Return ---")?;
+                writeln!(f, "    ret")?;
+            }
+            _ => panic!("{} Error: Invalid top level statement `{}`", statement.tok.pos, statement.tok.val_str())
         }
     }
 
     writeln!(f, "; --- Footer ---")?;
+    writeln!(f, "_start:")?;
     writeln!(f, "    call main")?;
     writeln!(f, "    mov rdi, 0")?;
     writeln!(f, "    mov rax, 60")?;
@@ -179,10 +204,7 @@ fn compile(src_path: String, src_code: String, flags: Vec<Flag>) {
         eprintln!();
     }
 
-    let mut nodes: Vec<ParseNode> = Vec::new();
-    ast.traverse(&mut nodes);
-    
-    let generate = generate_nasm_x86("output.asm".to_string(), nodes);
+    let generate = generate_nasm_x86("output.asm".to_string(), ast);
     let _ = generate.inspect_err(|e| panic!("Error: Failed to generate assembly: {e}"));
 
     eprintln!("Info: Calling `nasm -f elf64 -o output.o output.asm`");
@@ -225,106 +247,12 @@ fn compile(src_path: String, src_code: String, flags: Vec<Flag>) {
     }
 }
 
-fn simulate(src_path: String, src_code: String, flags: Vec<Flag>) {
-    if flags.contains(&Flag::EmitAsm) {
-        eprintln!("\n\x1b[33mWarning: Cannot emit assembly when simulating program\x1b[0m");
-    }
-    if flags.contains(&Flag::Run) {
-        eprintln!("\n\x1b[33mWarning: Redundant run flag when simulating program\x1b[0m");
-    }
-
-    eprintln!("\nInfo: Simulating program");
-
-    let mut lexer: Lexer = Lexer::new(src_code);
-    lexer.tokenize();
-    lexer.lex();
-    if flags.contains(&Flag::EmitTokens) {
-        eprintln!("Info: Emitting Tokens:");
-        for tok in &lexer.toks {
-            eprintln!("    Token: {}: {:?} `{}`", tok.pos, tok.kind, tok.val_str());
-        }
-        eprintln!();
-    }
-    let ast = &mut parser::ParseTree::new(src_path.clone());
-    ast.construct(&mut lexer);
-    if flags.contains(&Flag::EmitParseTree) {
-        eprintln!("Info: Emitting Parse Tree:");
-        ast.dump();
-        eprintln!();
-    }
-
-    let mut nodes: Vec<ParseNode> = Vec::new();
-    ast.traverse(&mut nodes);
-
-    let mut stack: Vec<i64> = Vec::new();
-    for node in &nodes {
-        match node.kind {
-            NodeType::Program => {}, // Don't need to do anything for this node
-            NodeType::FuncDecl => {
-                unimplemented!("Simulating function declaration");
-            },
-            NodeType::Literal => {
-                let val: i64 = node.tok.val_str().parse().expect("Error: Failed to parse string as int");
-                stack.push(val);
-            },
-            NodeType::DebugDump => {
-                let val: i64 = stack.pop().expect("Error: Failed to pop stack");
-                println!("{}", val);
-            },
-            NodeType::Return => {
-                let val: i64 = stack.pop().expect("Error: Failed to pop stack");
-                eprintln!("Info: Exit code {}", val);
-                exit(val.try_into().expect("Error: Failed to convert i64 to i32"));
-            },
-            NodeType::UnOp => {
-                match node.tok.kind {
-                    TokenType::OpMinus => {
-                        let val: i64 = stack.pop().expect("Error: Failed to pop stack");
-                        stack.push(-val);
-                    },
-                    _ => panic!("Error: Unknown unary operator kind `{:?}`", node.tok.kind)
-                }
-            },
-            NodeType::BinOp => {
-                match node.tok.kind {
-                    TokenType::OpPlus => {
-                        let val_a: i64 = stack.pop().expect("Error: Failed to pop stack");
-                        let val_b: i64 = stack.pop().expect("Error: Failed to pop stack");
-                        stack.push(val_a + val_b);
-                    },
-                    TokenType::OpMinus => {
-                        let val_a: i64 = stack.pop().expect("Error: Failed to pop stack");
-                        let val_b: i64 = stack.pop().expect("Error: Failed to pop stack");
-                        stack.push(val_b - val_a);
-                    },
-                    TokenType::OpMul => {
-                        let val_a: i64 = stack.pop().expect("Error: Failed to pop stack");
-                        let val_b: i64 = stack.pop().expect("Error: Failed to pop stack");
-                        stack.push(val_a * val_b);
-                    },
-                    TokenType::OpDiv => {
-                        let val_a: i64 = stack.pop().expect("Error: Failed to pop stack");
-                        let val_b: i64 = stack.pop().expect("Error: Failed to pop stack");
-                        stack.push(val_b / val_a);
-                    },
-                    _ => unimplemented!("Simulating other bin ops"),
-                }
-            }
-        }
-    }
-    eprintln!("\n\x1b[92mSIMULATION COMPLETE\x1b[0m");
-}
-
 pub fn usage(com: &str, path: &str) -> String {
     format!("
 \x1b[31mCOMPILATION FAILED\x1b[0m
 
 \x1b[92mUSAGE:\x1b[0m
-  {} \x1b[33m<subcommand>\x1b[0m {} \x1b[33m<flags>\x1b[0m 
-
-\x1b[92mSUBCOMMANDS:\x1b[0m
-  \x1b[33mcom\x1b[0m:   Compile the program
-  \x1b[33msim\x1b[0m:   Simulate the program
+  {} {} \x1b[33m<flags>\x1b[0m 
 
 \x1b[92mFLAGS:\x1b[0m
   \x1b[33m-r     --run\x1b[0m:          Run after compiling
@@ -339,7 +267,6 @@ pub fn main() {
 
     let mut it = args.iter();
     let com: &String = it.next().unwrap_or_else(|| panic!("Error: Failed to read compiler name from command line arguments"));
-    let subcom: &String = it.next().unwrap_or_else(|| panic!("{}", usage(com, "\x1b[33m<file path>\x1b[0m")));
     let src_path: &String = it.next().unwrap_or_else(|| panic!("{}", usage(com, "\x1b[33m<file path>\x1b[0m")));
 
     let mut flags: Vec<Flag> = Vec::new();
@@ -349,14 +276,10 @@ pub fn main() {
             "-a" | "--assembly"    => flags.push(Flag::EmitAsm),
             "-pt" | "--parse-tree" => flags.push(Flag::EmitParseTree),
             "-t" | "--tokens"      => flags.push(Flag::EmitTokens),
-            _ => panic!("{}", usage(com, "src_path"))
+            _ => panic!("{}", usage(com, src_path))
         }
     }
 
     let src_code: String = fs::read_to_string(src_path).unwrap_or_else(|_| panic!("{}", usage(com, src_path)));
-    match subcom.as_str() {
-        "com" => compile(src_path.to_string(), src_code, flags),
-        "sim" => simulate(src_path.to_string(), src_code, flags),
-        _ => panic!("{}", usage(com, src_path)),
-    }
+    compile(src_path.to_string(), src_code, flags);
 }
