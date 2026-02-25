@@ -2,38 +2,17 @@ use std::env;
 use std::fs;
 use std::io::Write;
 use std::process::Command;
-use crate::definitions::TokenType;
 use crate::lexer::Lexer;
+use crate::lexer::TokenType;
 use crate::parser::NodeType;
 use crate::parser::ParseNode;
 use crate::parser::ParseTree;
 
-pub mod definitions;
 pub mod lexer;
 pub mod parser;
 
 #[cfg(test)]
-pub mod tests {
-    use super::*;
-
-    #[test]
-    fn test_compilation() {
-        let tests: [(&'static str, &'static str); 1] = [
-            ("./tests/test_arithmetic.lang", "./tests/test_arithmetic.expected"),
-        ];
-        for test in tests {
-            let src_path = test.0;
-            let exp_path = test.1;
-            let src: String = fs::read_to_string(src_path).expect("Error: Test failed to read source file");
-            let exp: String = fs::read_to_string(exp_path).expect("Error: Test failed to read expected file");
-
-            compile(src_path.to_string(), src.clone(), vec![]);
-            let run = Command::new("./output").output().expect("Error: Failed to run executable");
-            let stdout = String::from_utf8(run.stdout).expect("Error: Failed to convert stdout to string");
-            assert_eq!(exp, stdout, "{} Error: Unexpected Program output.\nExpected:\n{}\n\nGot:\n{}", src_path, exp, stdout);
-        }
-    }
-}
+pub mod tests;
 
 #[derive(PartialEq)]
 enum Flag {
@@ -77,18 +56,14 @@ fn generate_nasm_x86(out_path: String, ast: &mut ParseTree) -> std::io::Result<(
     writeln!(f, "    add rsp, 40")?;
     writeln!(f, "    ret")?;
 
-    for statement in &ast.root.children {
-        eprintln!("Statement: {} ({:?}", statement.tok.val_str(), statement.kind);
-        match statement.kind {
-            NodeType::FuncDecl => {
-                writeln!(f, "; --- FuncDecl {} ---", statement.tok.val_str())?;
-                writeln!(f, "{}:", statement.tok.val_str())?;
-            }
-            _ => panic!("{} Error: Invalid top level statement `{}`", statement.tok.pos, statement.tok.val_str())
-        }
+    for func in &ast.root.children {
+        assert!(func.kind == NodeType::FuncDecl, "{} Error: Children of root must be functions", func.tok.pos);
+
+        writeln!(f, "; --- FuncDecl {} ---", func.tok.val_str())?;
+        writeln!(f, "{}:", func.tok.val_str())?;
 
         let mut nodes: Vec<ParseNode> = Vec::new();
-        ast.post_order(statement.clone(), &mut nodes);
+        ast.post_order(func.clone(), &mut nodes);
         nodes.pop();
         for node in nodes {
             match node.kind {
@@ -154,6 +129,91 @@ fn generate_nasm_x86(out_path: String, ast: &mut ParseTree) -> std::io::Result<(
                             writeln!(f, "    idiv rcx")?;
                             writeln!(f, "    push rax")?;
                         },
+                        TokenType::OpLessThan => {
+                            writeln!(f, "; --- BinOp::OpLessThan ---")?;
+                            writeln!(f, "    pop rbx")?;
+                            writeln!(f, "    pop rax")?;
+                            writeln!(f, "    cmp rax, rbx")?;
+                            writeln!(f, "    mov rax, 0")?;
+                            writeln!(f, "    setl al")?;
+                            writeln!(f, "    push rax")?;
+                        },
+                        TokenType::OpLessEqual => {
+                            writeln!(f, "; --- BinOp::OpLessEqual ---")?;
+                            writeln!(f, "    pop rbx")?;
+                            writeln!(f, "    pop rax")?;
+                            writeln!(f, "    cmp rax, rbx")?;
+                            writeln!(f, "    mov rax, 0")?;
+                            writeln!(f, "    setle al")?;
+                            writeln!(f, "    push rax")?;
+                        },
+                        TokenType::OpGreaterThan => {
+                            writeln!(f, "; --- BinOp::OpGreaterThan ---")?;
+                            writeln!(f, "    pop rbx")?;
+                            writeln!(f, "    pop rax")?;
+                            writeln!(f, "    cmp rax, rbx")?;
+                            writeln!(f, "    mov rax, 0")?;
+                            writeln!(f, "    setg al")?;
+                            writeln!(f, "    push rax")?;
+                        },
+                        TokenType::OpGreaterEqual => {
+                            writeln!(f, "; --- BinOp::OpGreaterEqual ---")?;
+                            writeln!(f, "    pop rbx")?;
+                            writeln!(f, "    pop rax")?;
+                            writeln!(f, "    cmp rax, rbx")?;
+                            writeln!(f, "    mov rax, 0")?;
+                            writeln!(f, "    setge al")?;
+                            writeln!(f, "    push rax")?;
+                        },
+                        TokenType::OpEqual => {
+                            writeln!(f, "; --- BinOp::OpEqual ---")?;
+                            writeln!(f, "    pop rbx")?;
+                            writeln!(f, "    pop rax")?;
+                            writeln!(f, "    cmp rax, rbx")?;
+                            writeln!(f, "    mov rax, 0")?;
+                            writeln!(f, "    sete al")?;
+                            writeln!(f, "    push rax")?;
+                        },
+                        TokenType::OpNotEqual => {
+                            writeln!(f, "; --- BinOp::OpNotEqual ---")?;
+                            writeln!(f, "    pop rbx")?;
+                            writeln!(f, "    pop rax")?;
+                            writeln!(f, "    cmp rax, rbx")?;
+                            writeln!(f, "    mov rax, 0")?;
+                            writeln!(f, "    setne al")?;
+                            writeln!(f, "    push rax")?;
+                        },
+                        TokenType::OpLogicalOr => {
+                            writeln!(f, "; --- BinOp::OpLogicalOr ---")?;
+                            writeln!(f, "_or_{}_{}:", node.tok.pos.col, node.tok.pos.row)?;
+                            writeln!(f, "    pop rax")?;
+                            writeln!(f, "    pop rbx")?;
+                            writeln!(f, "    cmp rax, 0")?;
+                            writeln!(f, "    je ._rhs")?;    // If lhs is false, check rhs
+                            writeln!(f, "    mov rax, 1")?;
+                            writeln!(f, "    jmp ._end")?;   // If lhs is true, short circuit
+                            writeln!(f, "._rhs:")?;
+                            writeln!(f, "    cmp rbx, 0")?;
+                            writeln!(f, "    mov rax, 0")?;
+                            writeln!(f, "    setne al")?;   // If rhs is true, set al to 1
+                            writeln!(f, "._end:")?;
+                            writeln!(f, "    push rax")?;
+                        },
+                        TokenType::OpLogicalAnd => {
+                            writeln!(f, "; --- BinOp::OpLogicalAnd ---")?;
+                            writeln!(f, "_and_{}_{}:", node.tok.pos.col, node.tok.pos.row)?;
+                            writeln!(f, "    pop rax")?;
+                            writeln!(f, "    pop rbx")?;
+                            writeln!(f, "    cmp rax, 0")?;
+                            writeln!(f, "    jne ._rhs")?;  // If lhs is true, check rhs
+                            writeln!(f, "    jmp ._end")?;  // If lhs is false, short circuit
+                            writeln!(f, "._rhs:")?;
+                            writeln!(f, "    cmp rbx, 0")?;
+                            writeln!(f, "    mov rax, 0")?;
+                            writeln!(f, "    setne al")?;   // If rhs is true, set al to 1
+                            writeln!(f, "._end:")?;
+                            writeln!(f, "    push rax")?;
+                        },
                         _ => unimplemented!("Generating assembly for other bin ops"),
                     }
                 },
@@ -164,13 +224,9 @@ fn generate_nasm_x86(out_path: String, ast: &mut ParseTree) -> std::io::Result<(
             }
         }
 
-        match statement.kind {
-            NodeType::FuncDecl => {
-                writeln!(f, "; --- Implicit Return ---")?;
-                writeln!(f, "    ret")?;
-            }
-            _ => panic!("{} Error: Invalid top level statement `{}`", statement.tok.pos, statement.tok.val_str())
-        }
+        eprintln!("TODO: Remove implicit return");
+        writeln!(f, "; --- Implicit Return ---")?;
+        writeln!(f, "    ret")?;
     }
 
     writeln!(f, "; --- Footer ---")?;

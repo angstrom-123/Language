@@ -1,5 +1,6 @@
 func my_function {
     dump 420;
+    my_other_function();
 }
 
 func main {
@@ -8,4 +9,8 @@ func main {
     dump 10 + -(4 + 1);
     my_function();
     exit 69;
+}
+
+func my_other_function {
+    dump 1234;
 }

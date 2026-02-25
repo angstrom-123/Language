@@ -1,6 +1,58 @@
-use crate::definitions::TokenType;
-use crate::definitions::Token;
-use crate::definitions::Pos;
+use std::fmt;
+
+#[derive(Debug)]
+#[derive(PartialEq)]
+#[derive(Clone)]
+pub enum TokenType {
+    None,
+    End,
+    OpPlus,
+    OpMinus,
+    OpMul,
+    OpDiv,
+    OpAssign,
+    OpEqual,
+    OpNotEqual,
+    OpGreaterThan,
+    OpLessThan,
+    OpGreaterEqual,
+    OpLessEqual,
+    OpLogicalOr,
+    OpLogicalAnd,
+    OpenParen,
+    CloseParen,
+    OpenScope,
+    CloseScope,
+    KeywordFunctionDecl,
+    KeywordExit,
+    KeywordDebugDump,
+    KeywordIf,
+    Identifier,
+    LiteralInt,
+}
+
+#[derive(Clone)]
+pub struct Pos {
+    pub row: usize,
+    pub col: usize,
+}
+impl fmt::Display for Pos {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "[{}:{}]", self.row, self.col)
+    }
+}
+
+#[derive(Clone)]
+pub struct Token {
+    pub kind: TokenType,
+    pub val: Vec<u8>,
+    pub pos: Pos,
+}
+impl Token {
+    pub fn val_str(&self) -> String {
+        String::from_utf8(self.val.clone()).expect("Error: Failed to convert token value to string")
+    }
+}
 
 pub struct Lexer {
     pub toks: Vec<Token>,
@@ -54,9 +106,9 @@ impl Lexer {
         let mut lexeme: Vec<u8> = Vec::new();
         loop {
             match self.rune {
-                b' ' | b'\n' => { // Delimiter and ignored
+                b' ' | b'\n' => {
                     if !lexeme.is_empty() {
-                        self.toks.push(Token { 
+                        self.toks.push(Token {
                             kind: TokenType::None,
                             val: lexeme.clone(),
                             pos: Pos { row: self.pos.row, col: self.pos.col - lexeme.len() },
@@ -64,9 +116,9 @@ impl Lexer {
                         lexeme.clear();
                     }
                 },
-                b';' | b'+' | b'-' | b'*' | b'/' | b'=' | b'(' | b')' => { // Delimiter
+                b';' | b'+' | b'-' | b'*' | b'/' | b'(' | b')' | b'{' | b'}' => {
                     if !lexeme.is_empty() {
-                        self.toks.push(Token { 
+                        self.toks.push(Token {
                             kind: TokenType::None,
                             val: lexeme.clone(),
                             pos: Pos { row: self.pos.row, col: self.pos.col - lexeme.len() },
@@ -74,37 +126,71 @@ impl Lexer {
                         lexeme.clear();
                     }
 
-                    // Also have to push on the delimiter token
                     lexeme.push(self.rune);
-                    self.toks.push(Token { 
+                    self.toks.push(Token {
                         kind: TokenType::None,
                         val: lexeme.clone(),
                         pos: Pos { row: self.pos.row, col: self.pos.col },
                     });
                     lexeme.clear();
                 },
-                _ => { // Other
+                b'>' | b'<' => {
+                    if !lexeme.is_empty() {
+                        self.toks.push(Token {
+                            kind: TokenType::None,
+                            val: lexeme.clone(),
+                            pos: Pos { row: self.pos.row, col: self.pos.col - lexeme.len() },
+                        });
+                        lexeme.clear();
+                    }
+                    lexeme.push(self.rune);
+                },
+                b'=' => {
+                    if !lexeme.is_empty() {
+                        let last: &u8 = lexeme.last().expect("Error: Failed to get last char in lexeme");
+                        if matches!(last, b'>' | b'<' | b'=') {
+                            lexeme.push(self.rune);
+                        }
+                        self.toks.push(Token {
+                            kind: TokenType::None,
+                            val: lexeme.clone(),
+                            pos: Pos { row: self.pos.row, col: self.pos.col - lexeme.len() },
+                        });
+                        lexeme.clear();
+                    } else {
+                        lexeme.push(self.rune);
+                    }
+                },
+                b'&' | b'|' => {
+                    if !lexeme.is_empty() {
+                        let last: &u8 = lexeme.last().expect("Error: Failed to get last char in lexeme");
+                        if matches!(last, b'&' | b'|') {
+                            lexeme.push(self.rune);
+                        }
+                        self.toks.push(Token {
+                            kind: TokenType::None,
+                            val: lexeme.clone(),
+                            pos: Pos { row: self.pos.row, col: self.pos.col - lexeme.len() },
+                        });
+                        lexeme.clear();
+                    } else {
+                        lexeme.push(self.rune);
+                    }
+                },
+                _ => {
                     lexeme.push(self.rune);
                 }
             }
 
-            // Advance cursor, position, and rune until end of file
-            if !self.advance() { break; }
-        }
-
-        // Push the last lexeme if it contains characters
-        if !lexeme.is_empty() {
-            self.toks.push(Token { 
-                kind: TokenType::None,
-                val: lexeme.clone(),
-                pos: Pos { row: self.pos.row, col: self.pos.col - 1 },
-            });
+            if !self.advance_char() {
+                break;
+            }
         }
 
         self.cur = 0;
     }
 
-    fn advance(&mut self) -> bool {
+    fn advance_char(&mut self) -> bool {
         self.cur += 1;
         self.pos.col += 1;
         if self.cur >= self.src.len() {
@@ -122,43 +208,48 @@ impl Lexer {
 
     pub fn lex(&mut self) {
         for tok in &mut self.toks {
-            if tok.val.is_empty() {
-                panic!("{} Error: Cannot have an empty token", tok.pos);
-            }
-
+            let len: usize = tok.val.len();
             let first: &u8 = tok.val.first().unwrap_or_else(|| panic!("{} Error: Failed to get first char in token", tok.pos));
-            match first { // First try to match using first byte
-                b'+' => tok.kind = TokenType::OpPlus,
-                b'-' => tok.kind = TokenType::OpMinus,
-                b'*' => tok.kind = TokenType::OpMul,
-                b'/' => tok.kind = TokenType::OpDiv,
-                b':' => tok.kind = TokenType::OpAssign,
-                b'(' => tok.kind = TokenType::OpenParen,
-                b')' => tok.kind = TokenType::CloseParen,
-                b'=' => tok.kind = TokenType::Equal,
-                b'~' => tok.kind = TokenType::NotEqual,
-                b'>' => tok.kind = TokenType::GreaterThan,
-                b'<' => tok.kind = TokenType::LessThan,
-                b'{' => tok.kind = TokenType::OpenScope,
-                b'}' => tok.kind = TokenType::CloseScope,
-                b';' => tok.kind = TokenType::End,
-                _    => { // Then try to match using the whole word
-                    match tok.val_str().as_str() {
-                        ">="     => tok.kind = TokenType::GreaterEqual,
-                        "<="     => tok.kind = TokenType::LessEqual,
-                        "and"    => tok.kind = TokenType::LogicalAnd,
-                        "or"     => tok.kind = TokenType::LogicalOr,
-                        "exit"   => tok.kind = TokenType::KeywordExit,
-                        "func"   => tok.kind = TokenType::KeywordFunctionDecl,
-                        "dump"   => tok.kind = TokenType::KeywordDebugDump,
-                        _ => { // Then match variable contents of words
-                            if tok.val.iter().all(|c| c.is_ascii_digit()) {
-                                tok.kind = TokenType::LiteralInt;
-                            } else if first.is_ascii_alphabetic() {
-                                tok.kind = TokenType::Identifier;
-                            } else {
-                                panic!("{} Error: Invalid token `{}`", tok.pos, tok.val_str());
-                            }
+
+            if len == 0 {
+                panic!("{} Error: Cannot have an empty token", tok.pos);
+            } else if len == 1 {
+                match first { // First try to match using first byte
+                    b'+' => tok.kind = TokenType::OpPlus,
+                    b'-' => tok.kind = TokenType::OpMinus,
+                    b'*' => tok.kind = TokenType::OpMul,
+                    b'/' => tok.kind = TokenType::OpDiv,
+                    b':' => tok.kind = TokenType::OpAssign,
+                    b'(' => tok.kind = TokenType::OpenParen,
+                    b')' => tok.kind = TokenType::CloseParen,
+                    b'=' => tok.kind = TokenType::OpEqual,
+                    b'>' => tok.kind = TokenType::OpGreaterThan,
+                    b'<' => tok.kind = TokenType::OpLessThan,
+                    b'{' => tok.kind = TokenType::OpenScope,
+                    b'}' => tok.kind = TokenType::CloseScope,
+                    b';' => tok.kind = TokenType::End,
+                    b'0'..=b'9' => tok.kind = TokenType::LiteralInt,
+                    b'A'..=b'z' => tok.kind = TokenType::Identifier,
+                    _ => panic!("{} Error: Invalid token `{}`", tok.pos, tok.val_str()),
+                }
+            } else {
+                match tok.val_str().as_str() {
+                    "~="   => tok.kind = TokenType::OpNotEqual,
+                    ">="   => tok.kind = TokenType::OpGreaterEqual,
+                    "<="   => tok.kind = TokenType::OpLessEqual,
+                    "&&"   => tok.kind = TokenType::OpLogicalAnd,
+                    "||"   => tok.kind = TokenType::OpLogicalOr,
+                    "exit" => tok.kind = TokenType::KeywordExit,
+                    "func" => tok.kind = TokenType::KeywordFunctionDecl,
+                    "dump" => tok.kind = TokenType::KeywordDebugDump,
+                    "if"   => tok.kind = TokenType::KeywordIf,
+                    _ => { // Then match variable contents of words
+                        if tok.val.iter().all(|c| c.is_ascii_digit()) {
+                            tok.kind = TokenType::LiteralInt;
+                        } else if first.is_ascii_alphabetic() {
+                            tok.kind = TokenType::Identifier;
+                        } else {
+                            panic!("{} Error: Invalid token `{}`", tok.pos, tok.val_str());
                         }
                     }
                 }
