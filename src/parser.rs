@@ -8,6 +8,7 @@ use crate::lexer::Lexer;
 pub enum NodeType {
     Program,
     Return,
+    FuncDecl,
     DebugDump,
     BinOp,
     UnOp,
@@ -80,6 +81,14 @@ impl ParseNode {
             children: Vec::new(),
         }
     }
+
+    fn new_func_decl(ident_tok: Token, body: Vec<ParseNode>) -> Self {
+        ParseNode {
+            kind: NodeType::FuncDecl,
+            tok: ident_tok,
+            children: body,
+        }
+    }
 }
 
 pub struct ParseTree {
@@ -116,17 +125,16 @@ impl ParseTree {
 
     fn parse_factor(&mut self, lexer: &mut Lexer) -> ParseNode {
         let mut tok: Token = lexer.consume_token();
-        eprintln!("Factor just consumed: {}", tok.val_str());
         match tok.kind {
             TokenType::LiteralInt => ParseNode::new_literal(tok),
             TokenType::OpMinus => { // Unary minus
                 let factor: ParseNode = self.parse_factor(lexer);
                 ParseNode::new_un_op(tok, factor)
             },
-            TokenType::OpOpenParen => {
+            TokenType::OpenParen => {
                 let expression: ParseNode = self.parse_expression(lexer);
                 tok = lexer.consume_token();
-                if tok.kind != TokenType::OpCloseParen {
+                if tok.kind != TokenType::CloseParen {
                     panic!("{} Error: Expected `)` but got `{}`", tok.pos, tok.val_str());
                 }
                 expression
@@ -179,6 +187,25 @@ impl ParseTree {
                     panic!("{} Error: Expected `;` but got `{}`", next_tok.pos, next_tok.val_str());
                 }
                 ParseNode::new_debug_dump(tok, expression)
+            },
+            TokenType::KeywordFunctionDecl => {
+                let name_tok: Token = lexer.consume_token();
+                if name_tok.kind != TokenType::Identifier {
+                    panic!("{} Error: Expected identifier but got `{}`", name_tok.pos, name_tok.val_str());
+                }
+
+                let mut next_tok: Token = lexer.consume_token();
+                if next_tok.kind != TokenType::OpenScope {
+                    panic!("{} Error: Expected `{{` but got `{}`", next_tok.pos, next_tok.val_str());
+                }
+
+                let mut body: Vec<ParseNode> = Vec::new();
+                while next_tok.kind != TokenType::CloseScope {
+                    body.push(self.parse_statement(lexer));
+                    next_tok = lexer.peek_token();
+                }
+                lexer.consume_token();
+                ParseNode::new_func_decl(name_tok, body)
             },
             _ => panic!("{} Error: Unknown statement `{}`", tok.pos, tok.val_str()),
         }

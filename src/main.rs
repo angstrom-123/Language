@@ -81,6 +81,10 @@ fn generate_nasm_x86(out_path: String, nodes: Vec<ParseNode>) -> std::io::Result
     for node in nodes {
         match node.kind {
             NodeType::Program => {}, // Don't need to do anything for this node
+            NodeType::FuncDecl => {
+                writeln!(f, "; --- FuncDecl {} ---", node.tok.val_str())?;
+                writeln!(f, "{}:", node.tok.val_str())?;
+            },
             NodeType::Literal => {
                 writeln!(f, "; --- Literal {} ---", node.tok.val_str())?;
                 writeln!(f, "    mov rax, {}", node.tok.val_str())?;
@@ -146,6 +150,7 @@ fn generate_nasm_x86(out_path: String, nodes: Vec<ParseNode>) -> std::io::Result
     }
 
     writeln!(f, "; --- Footer ---")?;
+    writeln!(f, "    call main")?;
     writeln!(f, "    mov rdi, 0")?;
     writeln!(f, "    mov rax, 60")?;
     writeln!(f, "    syscall")?;
@@ -255,6 +260,9 @@ fn simulate(src_path: String, src_code: String, flags: Vec<Flag>) {
     for node in &nodes {
         match node.kind {
             NodeType::Program => {}, // Don't need to do anything for this node
+            NodeType::FuncDecl => {
+                unimplemented!("Simulating function declaration");
+            },
             NodeType::Literal => {
                 let val: i64 = node.tok.val_str().parse().expect("Error: Failed to parse string as int");
                 stack.push(val);

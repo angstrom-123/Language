@@ -2,15 +2,6 @@ use crate::definitions::TokenType;
 use crate::definitions::Token;
 use crate::definitions::Pos;
 
-#[derive(PartialEq)]
-enum TokenParseType {
-    Letter,
-    Number,
-    Operator,
-    End,
-    Scope
-}
-
 pub struct Lexer {
     pub toks: Vec<Token>,
     pub pos: Pos,
@@ -130,76 +121,48 @@ impl Lexer {
     }
 
     pub fn lex(&mut self) {
-        let mut parse_type: Vec<TokenParseType> = Vec::new();
         for tok in &mut self.toks {
-            let s: String = tok.val_str();
-
-            // Find the types of each character making up the token's value
-            for byte in &tok.val {
-                match byte {
-                    b'+' | b'-' | b'*' | b'/' | b'=' | b'(' | b')' => parse_type.push(TokenParseType::Operator),
-                    b'{' | b'}' => parse_type.push(TokenParseType::Scope),
-                    b';' => parse_type.push(TokenParseType::End),
-                    b'0'..=b'9' => parse_type.push(TokenParseType::Number),
-                    b'A'..=b'z' => parse_type.push(TokenParseType::Letter),
-                    _ => panic!("{} Error: Invalid first character in token `{}`", tok.pos, s),
-                }
+            if tok.val.is_empty() {
+                panic!("{} Error: Cannot have an empty token", tok.pos);
             }
 
-            // Get the category of the token based on its character types.
-            let mut it = parse_type.iter();
-            let n: usize = it.len();
-            let first: &TokenParseType = it.next().unwrap_or_else(|| panic!("{} Error: Token must have at least 1 parse type", tok.pos));
-            match first {
-                TokenParseType::Operator => {
-                    assert!(n == 1, "{} Error: Operator type tokens must have a length of 1", tok.pos);
-                    match s.as_str() {
-                        "+" => tok.kind = TokenType::OpPlus,
-                        "-" => tok.kind = TokenType::OpMinus,
-                        "*" => tok.kind = TokenType::OpMul,
-                        "/" => tok.kind = TokenType::OpDiv,
-                        "=" => tok.kind = TokenType::OpAssign,
-                        "(" => tok.kind = TokenType::OpOpenParen,
-                        ")" => tok.kind = TokenType::OpCloseParen,
-                        _ => panic!("{} Error: Invalid value for operator token `{}`", tok.pos, s),
-                    }
-                },
-                TokenParseType::Scope => {
-                    match s.as_str() {
-                        "{" => tok.kind = TokenType::OpenScope,
-                        "}" => tok.kind = TokenType::CloseScope,
-                        _ => panic!("{} Error: Invalid value for scope token `{}`", tok.pos, s),
-                    }
-                },
-                TokenParseType::End => {
-                    assert!(n == 1, "{} Error: Invalid value for end token `{}`", tok.pos, s);
-                    tok.kind = TokenType::End;
-                },
-                TokenParseType::Number => {
-                    for next in it { 
-                        if *next != TokenParseType::Number {
-                            panic!("{} Error: Unexpected letter in number `{}`", tok.pos, s);
-                        }
-                    }
-                    tok.kind = TokenType::LiteralInt;
-                },
-                TokenParseType::Letter => {
-                    for next in it { 
-                        if matches!(next, TokenParseType::End | TokenParseType::Operator) {
-                            panic!("{} Error: Unexpected special character in word `{}`", tok.pos, s);
-                        }
-                    }
-
-                    // Match against keywords
-                    match s.as_str() {
+            let first: &u8 = tok.val.first().unwrap_or_else(|| panic!("{} Error: Failed to get first char in token", tok.pos));
+            match first { // First try to match using first byte
+                b'+' => tok.kind = TokenType::OpPlus,
+                b'-' => tok.kind = TokenType::OpMinus,
+                b'*' => tok.kind = TokenType::OpMul,
+                b'/' => tok.kind = TokenType::OpDiv,
+                b':' => tok.kind = TokenType::OpAssign,
+                b'(' => tok.kind = TokenType::OpenParen,
+                b')' => tok.kind = TokenType::CloseParen,
+                b'=' => tok.kind = TokenType::Equal,
+                b'~' => tok.kind = TokenType::NotEqual,
+                b'>' => tok.kind = TokenType::GreaterThan,
+                b'<' => tok.kind = TokenType::LessThan,
+                b'{' => tok.kind = TokenType::OpenScope,
+                b'}' => tok.kind = TokenType::CloseScope,
+                b';' => tok.kind = TokenType::End,
+                _    => { // Then try to match using the whole word
+                    match tok.val_str().as_str() {
+                        ">="     => tok.kind = TokenType::GreaterEqual,
+                        "<="     => tok.kind = TokenType::LessEqual,
+                        "and"    => tok.kind = TokenType::LogicalAnd,
+                        "or"     => tok.kind = TokenType::LogicalOr,
                         "return" => tok.kind = TokenType::KeywordReturn,
+                        "func"   => tok.kind = TokenType::KeywordFunctionDecl,
                         "dump"   => tok.kind = TokenType::KeywordDebugDump,
-                        _        => tok.kind = TokenType::Identifier,
+                        _ => { // Then match variable contents of words
+                            if tok.val.iter().all(|c| c.is_ascii_digit()) {
+                                tok.kind = TokenType::LiteralInt;
+                            } else if first.is_ascii_alphabetic() {
+                                tok.kind = TokenType::Identifier;
+                            } else {
+                                panic!("{} Error: Invalid token `{}`", tok.pos, tok.val_str());
+                            }
+                        }
                     }
                 }
             }
-
-            parse_type.clear();
         }
     }
 }
