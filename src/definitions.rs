@@ -11,22 +11,26 @@ pub enum TokenType {
     OpMul,
     OpDiv,
     OpAssign,
+    OpOpenParen,
+    OpCloseParen,
+    OpenScope,
+    CloseScope,
     KeywordReturn,
     KeywordDebugDump,
-    KeywordDeclare,
     Identifier,
     LiteralInt,
 }
 impl TokenType {
     pub fn precedence(&self) -> i32 {
         match self {
-            TokenType::OpPlus     => 5,
-            TokenType::OpMinus    => 5,
-            TokenType::LiteralInt => 0,
-            TokenType::Identifier => 0,
-            TokenType::OpMul      => 10,
-            TokenType::OpDiv      => 10,
-            _                     => -1,
+            TokenType::OpPlus      => 5,
+            TokenType::OpMinus     => 5,
+            TokenType::LiteralInt  => 0,
+            TokenType::Identifier  => 0,
+            TokenType::OpMul       => 10,
+            TokenType::OpDiv       => 10,
+            TokenType::OpOpenParen => 15,
+            _                      => -1,
         }
     }
 }

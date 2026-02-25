@@ -7,7 +7,8 @@ enum TokenParseType {
     Letter,
     Number,
     Operator,
-    End
+    End,
+    Scope
 }
 
 pub struct Lexer {
@@ -45,6 +46,19 @@ impl Lexer {
         tok.clone()
     }
 
+    pub fn previous_token(&mut self) -> Token {
+        let tok = self.toks.get(self.cur - 1).expect("Error: Lexer failed to peek previous token");
+        tok.clone()
+    }
+
+    pub fn dump_remaining_tokens(&mut self) {
+        eprintln!("Lexer Dump:");
+        for i in self.cur..self.toks.len() {
+            let tok = self.toks.get(i).expect("Error: Lexer failed to dump next token");
+            eprintln!("{}", tok.val_str());
+        }
+    }
+
     pub fn tokenize(&mut self) {
         let mut lexeme: Vec<u8> = Vec::new();
         loop {
@@ -59,7 +73,7 @@ impl Lexer {
                         lexeme.clear();
                     }
                 },
-                b';' | b'+' | b'-' | b'*' | b'/' | b'=' => { // Delimiter
+                b';' | b'+' | b'-' | b'*' | b'/' | b'=' | b'(' | b')' => { // Delimiter
                     if !lexeme.is_empty() {
                         self.toks.push(Token { 
                             kind: TokenType::None,
@@ -118,16 +132,17 @@ impl Lexer {
     pub fn lex(&mut self) {
         let mut parse_type: Vec<TokenParseType> = Vec::new();
         for tok in &mut self.toks {
-            let s: String = String::from_utf8(tok.val.clone()).unwrap_or_else(|_| panic!("{} Error: Failed to convert token value to string", tok.pos));
+            let s: String = tok.val_str();
 
             // Find the types of each character making up the token's value
             for byte in &tok.val {
                 match byte {
-                    b'+' | b'-' | b'*' | b'/' | b'=' => parse_type.push(TokenParseType::Operator),
-                    b';'=> parse_type.push(TokenParseType::End),
+                    b'+' | b'-' | b'*' | b'/' | b'=' | b'(' | b')' => parse_type.push(TokenParseType::Operator),
+                    b'{' | b'}' => parse_type.push(TokenParseType::Scope),
+                    b';' => parse_type.push(TokenParseType::End),
                     b'0'..=b'9' => parse_type.push(TokenParseType::Number),
                     b'A'..=b'z' => parse_type.push(TokenParseType::Letter),
-                    _ => unreachable!("{} Error: Invalid first character in token", tok.pos),
+                    _ => panic!("{} Error: Invalid first character in token `{}`", tok.pos, s),
                 }
             }
 
@@ -144,17 +159,26 @@ impl Lexer {
                         "*" => tok.kind = TokenType::OpMul,
                         "/" => tok.kind = TokenType::OpDiv,
                         "=" => tok.kind = TokenType::OpAssign,
-                        _ => unreachable!("Error: Invalid value for operator token"),
+                        "(" => tok.kind = TokenType::OpOpenParen,
+                        ")" => tok.kind = TokenType::OpCloseParen,
+                        _ => panic!("{} Error: Invalid value for operator token `{}`", tok.pos, s),
+                    }
+                },
+                TokenParseType::Scope => {
+                    match s.as_str() {
+                        "{" => tok.kind = TokenType::OpenScope,
+                        "}" => tok.kind = TokenType::CloseScope,
+                        _ => panic!("{} Error: Invalid value for scope token `{}`", tok.pos, s),
                     }
                 },
                 TokenParseType::End => {
-                    assert!(n == 1, "{} Error: End type tokens must have a length of 1", tok.pos);
+                    assert!(n == 1, "{} Error: Invalid value for end token `{}`", tok.pos, s);
                     tok.kind = TokenType::End;
                 },
                 TokenParseType::Number => {
                     for next in it { 
                         if *next != TokenParseType::Number {
-                            panic!("{} Error: Expression starting with number must only contain numbers", tok.pos);
+                            panic!("{} Error: Unexpected letter in number `{}`", tok.pos, s);
                         }
                     }
                     tok.kind = TokenType::LiteralInt;
@@ -162,7 +186,7 @@ impl Lexer {
                 TokenParseType::Letter => {
                     for next in it { 
                         if matches!(next, TokenParseType::End | TokenParseType::Operator) {
-                            panic!("{} Error: Expression starting with letter must not contain special characters", tok.pos);
+                            panic!("{} Error: Unexpected special character in word `{}`", tok.pos, s);
                         }
                     }
 
@@ -170,7 +194,6 @@ impl Lexer {
                     match s.as_str() {
                         "return" => tok.kind = TokenType::KeywordReturn,
                         "dump"   => tok.kind = TokenType::KeywordDebugDump,
-                        "let"    => tok.kind = TokenType::KeywordDeclare,
                         _        => tok.kind = TokenType::Identifier,
                     }
                 }

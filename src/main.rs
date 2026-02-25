@@ -5,12 +5,44 @@ use std::process::Command;
 use std::process::exit;
 use crate::definitions::TokenType;
 use crate::lexer::Lexer;
-use crate::parser::ExprType;
+use crate::parser::NodeType;
 use crate::parser::ParseNode;
 
 pub mod definitions;
 pub mod lexer;
 pub mod parser;
+
+#[cfg(test)]
+pub mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compilation() {
+        let tests: [(&'static str, &'static str); 1] = [
+            ("./tests/test_arithmetic.lang", "./tests/test_arithmetic.expected"),
+        ];
+        for test in tests {
+            let src_path = test.0;
+            let exp_path = test.1;
+            let src: String = fs::read_to_string(src_path).expect("Error: Test failed to read source file");
+            let exp: String = fs::read_to_string(exp_path).expect("Error: Test failed to read expected file");
+
+            compile(src_path.to_string(), src.clone(), vec![]);
+            let run = Command::new("./output").output().expect("Error: Failed to run executable");
+            let stdout = String::from_utf8(run.stdout).expect("Error: Failed to convert stdout to string");
+            assert_eq!(exp, stdout, "Error: Unexpected Program output.\nExpected:\n{}\n\nGot:\n{}", exp, stdout);
+        }
+    }
+}
+
+
+#[derive(PartialEq)]
+enum Flag {
+    EmitTokens,
+    EmitParseTree,
+    EmitAsm,
+    Run
+}
 
 fn generate_nasm_x86(out_path: String, nodes: Vec<ParseNode>) -> std::io::Result<()> {
     let mut f = fs::File::create(out_path)?;
@@ -48,24 +80,35 @@ fn generate_nasm_x86(out_path: String, nodes: Vec<ParseNode>) -> std::io::Result
     writeln!(f, "_start:")?;
     for node in nodes {
         match node.kind {
-            ExprType::Program => {}, // Don't need to do anything for this node
-            ExprType::Literal => {
+            NodeType::Program => {}, // Don't need to do anything for this node
+            NodeType::Literal => {
                 writeln!(f, "; --- Literal {} ---", node.tok.val_str())?;
                 writeln!(f, "    mov rax, {}", node.tok.val_str())?;
                 writeln!(f, "    push rax")?;
             },
-            ExprType::Return => {
+            NodeType::Return => {
                 writeln!(f, "; --- Return ---")?;
                 writeln!(f, "    pop rdi")?;
                 writeln!(f, "    mov rax, 60")?;
                 writeln!(f, "    syscall")?;
             },
-            ExprType::DebugDump => {
+            NodeType::DebugDump => {
                 writeln!(f, "; --- DebugDump ---")?;
                 writeln!(f, "    pop rdi")?;
                 writeln!(f, "    call dump")?;
             },
-            ExprType::BinOp => {
+            NodeType::UnOp => {
+                match node.tok.kind {
+                    TokenType::OpMinus => {
+                        writeln!(f, "; --- UnOp::OpMinus ---")?;
+                        writeln!(f, "    pop rax")?;
+                        writeln!(f, "    neg rax")?;
+                        writeln!(f, "    push rax")?;
+                    },
+                    _ => panic!("Error: Unknown unary operator kind `{:?}`", node.tok.kind)
+                }
+            },
+            NodeType::BinOp => {
                 match node.tok.kind {
                     TokenType::OpPlus => {
                         writeln!(f, "; --- BinOp::OpPlus ---")?;
@@ -98,10 +141,7 @@ fn generate_nasm_x86(out_path: String, nodes: Vec<ParseNode>) -> std::io::Result
                     },
                     _ => unimplemented!("Generating assembly for other bin ops"),
                 }
-            },
-            _ => {
-                unimplemented!("Parsing all tokens");
-            },
+            }
         }
     }
 
@@ -113,86 +153,131 @@ fn generate_nasm_x86(out_path: String, nodes: Vec<ParseNode>) -> std::io::Result
     Ok(())
 }
 
-pub fn compile(src_path: String, src_code: String) {
-    eprintln!("Tokenizing:");
+fn compile(src_path: String, src_code: String, flags: Vec<Flag>) {
+    eprintln!("\nInfo: Compiling program");
+
     let mut lexer: Lexer = Lexer::new(src_code);
     lexer.tokenize();
-    for tok in &lexer.toks {
-        eprintln!("[{:3}:{:3}]: {:.<14}", tok.pos.row, tok.pos.col, tok.val_str());
-    }
-
-    eprintln!("\nLexing:");
     lexer.lex();
-    for tok in &lexer.toks {
-        eprintln!("[{:3}:{:3}]: {:.<14} {:?}", tok.pos.row, tok.pos.col, tok.val_str(), tok.kind);
+    if flags.contains(&Flag::EmitTokens) {
+        eprintln!("Info: Emitting Tokens:");
+        for tok in &lexer.toks {
+            eprintln!("    Token: {}: {:?} `{}`", tok.pos, tok.kind, tok.val_str());
+        }
+        eprintln!();
     }
-
-    eprintln!("\nParsing:");
     let ast = &mut parser::ParseTree::new(src_path.clone());
     ast.construct(&mut lexer);
-    ast.dump();
+    if flags.contains(&Flag::EmitParseTree) {
+        eprintln!("Info: Emitting Parse Tree:");
+        ast.dump();
+        eprintln!();
+    }
 
-    eprintln!("\nGenerating asm:");
     let mut nodes: Vec<ParseNode> = Vec::new();
     ast.traverse(&mut nodes);
     
     let generate = generate_nasm_x86("output.asm".to_string(), nodes);
     let _ = generate.inspect_err(|e| panic!("Error: Failed to generate assembly: {e}"));
-    eprintln!("{} -> output.asm", src_path.clone());
 
-    eprintln!("\nAssembling:");
+    eprintln!("Info: Calling `nasm -f elf64 -o output.o output.asm`");
     let assemble = Command::new("nasm").arg("-f").arg("elf64").arg("-o").arg("output.o").arg("output.asm").output();
-    let _ = assemble.inspect_err(|e| panic!("Error: Failed to assemble program: {e}"));
-    eprintln!("output.asm -> output.o");
+    let assemble_err: String = String::from_utf8(assemble.ok().unwrap().stderr).expect("");
+    if !assemble_err.is_empty() {
+        panic!("\n\x1b[31mCOMPILATION FAILED (assembler) \n{}\x1b[0m", assemble_err);
+    }
 
-    eprintln!("\nLinking:");
+    eprintln!("Info: Calling `ld -o output output.o`");
     let link = Command::new("ld").arg("-o").arg("output").arg("output.o").output();
-    let _ = link.inspect_err(|e| panic!("Error: Failed to link program: {e}"));
-    eprintln!("output.o -> output");
-    
-    eprintln!("\nCompilation Complete");
+    let link_err: String = String::from_utf8(link.ok().unwrap().stderr).expect("");
+    if !link_err.is_empty() {
+        panic!("\n\x1b[31mCOMPILATION FAILED (linker) \n{}\x1b[0m", link_err);
+    }
+
+    if !flags.contains(&Flag::EmitAsm) {
+        eprintln!("Info: Calling `rm output.asm`");
+        let rm_asm = Command::new("rm").arg("output.asm").output();
+        let rm_asm_err: String = String::from_utf8(rm_asm.expect("Error: Failed to retrieve output of assembling").stderr).expect("Error: Failed to convert stderr to string");
+        if !rm_asm_err.is_empty() {
+            panic!("\n\x1b[31mCOMPILATION FAILED (delete intermediate .asm) \n{}\x1b[0m", rm_asm_err);
+        }
+    }
+
+    eprintln!("Info: Calling `rm output.o`");
+    let rm_o = Command::new("rm").arg("output.o").output();
+    let rm_o_err: String = String::from_utf8(rm_o.expect("Error: Failed to retrieve result of linking").stderr).expect("Error: Failed to convert stderr to string");
+    if !rm_o_err.is_empty() {
+        panic!("\n\x1b[31mCOMPILATION FAILED (delete intermediate .o) \n{}\x1b[0m", rm_o_err);
+    }
+
+    eprintln!("\n\x1b[92mCOMPILATION COMPLETE\x1b[0m");
+
+    if flags.contains(&Flag::Run) {
+        eprintln!("Info: Calling `./output`");
+        let run = Command::new("./output").spawn().expect("Error: Failed to run executable").wait_with_output();
+        let status = run.expect("Error: Failed to retrieve output of running").status;
+        eprintln!("Info: Exit code {}", status.code().expect("Error: Failed to retrieve exit code of executable"));
+    }
 }
 
-pub fn simulate(src_path: String, src_code: String) {
-    eprintln!("Tokenizing:");
+fn simulate(src_path: String, src_code: String, flags: Vec<Flag>) {
+    if flags.contains(&Flag::EmitAsm) {
+        eprintln!("\n\x1b[33mWarning: Cannot emit assembly when simulating program\x1b[0m");
+    }
+    if flags.contains(&Flag::Run) {
+        eprintln!("\n\x1b[33mWarning: Redundant run flag when simulating program\x1b[0m");
+    }
+
+    eprintln!("\nInfo: Simulating program");
+
     let mut lexer: Lexer = Lexer::new(src_code);
     lexer.tokenize();
-    for tok in &lexer.toks {
-        eprintln!("[{:3}:{:3}]: {:.<14}", tok.pos.row, tok.pos.col, tok.val_str());
-    }
-
-    eprintln!("\nLexing:");
     lexer.lex();
-    for tok in &lexer.toks {
-        eprintln!("[{:3}:{:3}]: {:.<14} {:?}", tok.pos.row, tok.pos.col, tok.val_str(), tok.kind);
+    if flags.contains(&Flag::EmitTokens) {
+        eprintln!("Info: Emitting Tokens:");
+        for tok in &lexer.toks {
+            eprintln!("    Token: {}: {:?} `{}`", tok.pos, tok.kind, tok.val_str());
+        }
+        eprintln!();
+    }
+    let ast = &mut parser::ParseTree::new(src_path.clone());
+    ast.construct(&mut lexer);
+    if flags.contains(&Flag::EmitParseTree) {
+        eprintln!("Info: Emitting Parse Tree:");
+        ast.dump();
+        eprintln!();
     }
 
-    eprintln!("\nParsing:");
-    let ast = &mut parser::ParseTree::new(src_path);
-    ast.construct(&mut lexer);
-    ast.dump();
-
-    eprintln!("\nSimulating:");
     let mut nodes: Vec<ParseNode> = Vec::new();
     ast.traverse(&mut nodes);
 
     let mut stack: Vec<i64> = Vec::new();
     for node in &nodes {
         match node.kind {
-            ExprType::Program => {}, // Don't need to do anything for this node
-            ExprType::Literal => {
+            NodeType::Program => {}, // Don't need to do anything for this node
+            NodeType::Literal => {
                 let val: i64 = node.tok.val_str().parse().expect("Error: Failed to parse string as int");
                 stack.push(val);
             },
-            ExprType::DebugDump => {
+            NodeType::DebugDump => {
                 let val: i64 = stack.pop().expect("Error: Failed to pop stack");
                 println!("{}", val);
             },
-            ExprType::Return => {
+            NodeType::Return => {
                 let val: i64 = stack.pop().expect("Error: Failed to pop stack");
+                eprintln!("Info: Exit code {}", val);
                 exit(val.try_into().expect("Error: Failed to convert i64 to i32"));
             },
-            ExprType::BinOp => {
+            NodeType::UnOp => {
+                match node.tok.kind {
+                    TokenType::OpMinus => {
+                        let val: i64 = stack.pop().expect("Error: Failed to pop stack");
+                        stack.push(-val);
+                    },
+                    _ => panic!("Error: Unknown unary operator kind `{:?}`", node.tok.kind)
+                }
+            },
+            NodeType::BinOp => {
                 match node.tok.kind {
                     TokenType::OpPlus => {
                         let val_a: i64 = stack.pop().expect("Error: Failed to pop stack");
@@ -216,13 +301,10 @@ pub fn simulate(src_path: String, src_code: String) {
                     },
                     _ => unimplemented!("Simulating other bin ops"),
                 }
-            },
-            _ => {
-                unimplemented!("Parsing all tokens");
-            },
+            }
         }
     }
-    eprintln!("Simulation Complete");
+    eprintln!("\n\x1b[92mSIMULATION COMPLETE\x1b[0m");
 }
 
 pub fn usage(com: &str, path: &str) -> String {
@@ -230,11 +312,17 @@ pub fn usage(com: &str, path: &str) -> String {
 \x1b[31mCOMPILATION FAILED\x1b[0m
 
 \x1b[92mUSAGE:\x1b[0m
-  {} \x1b[33m<subcommand>\x1b[0m {}
+  {} \x1b[33m<subcommand>\x1b[0m {} \x1b[33m<flags>\x1b[0m 
 
 \x1b[92mSUBCOMMANDS:\x1b[0m
-  `\x1b[33mcom\x1b[0m`:   Compile  the program
-  `\x1b[33msim\x1b[0m`:   Simulate the program
+  \x1b[33mcom\x1b[0m:   Compile the program
+  \x1b[33msim\x1b[0m:   Simulate the program
+
+\x1b[92mFLAGS:\x1b[0m
+  \x1b[33m-r     --run\x1b[0m:          Run after compiling
+  \x1b[33m-pt    --parse-tree\x1b[0m:   Print parse tree
+  \x1b[33m-t     --tokens\x1b[0m:       Print tokens
+  \x1b[33m-a     --assembly\x1b[0m:     Keep intermediate assembly
 ", com, path)
 }                  
                    
@@ -246,14 +334,21 @@ pub fn main() {
     let subcom: &String = it.next().unwrap_or_else(|| panic!("{}", usage(com, "\x1b[33m<file path>\x1b[0m")));
     let src_path: &String = it.next().unwrap_or_else(|| panic!("{}", usage(com, "\x1b[33m<file path>\x1b[0m")));
 
-    if it.len() > 0 {
-        panic!("{}", usage(com, src_path))
+    let mut flags: Vec<Flag> = Vec::new();
+    for arg in it {
+        match arg.as_str() {
+            "-r" | "--run"         => flags.push(Flag::Run),
+            "-a" | "--assembly"    => flags.push(Flag::EmitAsm),
+            "-pt" | "--parse-tree" => flags.push(Flag::EmitParseTree),
+            "-t" | "--tokens"      => flags.push(Flag::EmitTokens),
+            _ => panic!("{}", usage(com, "src_path"))
+        }
     }
 
     let src_code: String = fs::read_to_string(src_path).unwrap_or_else(|_| panic!("{}", usage(com, src_path)));
     match subcom.as_str() {
-        "com" => compile(src_path.to_string(), src_code),
-        "sim" => simulate(src_path.to_string(), src_code),
+        "com" => compile(src_path.to_string(), src_code, flags),
+        "sim" => simulate(src_path.to_string(), src_code, flags),
         _ => panic!("{}", usage(com, src_path)),
     }
 }
