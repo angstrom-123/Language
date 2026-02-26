@@ -11,6 +11,9 @@ pub enum NodeType {
     Exit,
     FuncDecl,
     FuncCall,
+    VarDecl,
+    Var,
+    Assign,
     DebugDump,
     BinOp,
     UnOp,
@@ -99,6 +102,46 @@ impl ParseNode {
             children: vec![],
         }
     }
+
+    fn new_assign(ident_tok: Token, rhs: ParseNode) -> Self {
+        ParseNode {
+            kind: NodeType::Assign,
+            tok: ident_tok,
+            children: vec![rhs],
+        }
+    }
+
+    fn new_var(ident_tok: Token) -> Self {
+        ParseNode {
+            kind: NodeType::Var,
+            tok: ident_tok,
+            children: vec![],
+        }
+    }
+
+    fn new_var_decl(ident_tok: Token, rhs: Option<ParseNode>) -> Self {
+        match rhs {
+            None => {
+                let init_tok: Token = Token {
+                    kind: TokenType::LiteralInt,
+                    val: vec![b'0'],
+                    pos: Pos { col: usize::MAX, row: usize::MAX },
+                };
+                ParseNode {
+                    kind: NodeType::VarDecl,
+                    tok: ident_tok,
+                    children: vec![ParseNode::new_literal(init_tok)],
+                }
+            },
+            Some(n) => {
+                ParseNode {
+                    kind: NodeType::VarDecl,
+                    tok: ident_tok,
+                    children: vec![n],
+                }
+            }
+        }
+    }
 }
 
 pub struct ParseTree {
@@ -129,22 +172,22 @@ impl ParseTree {
         res.push(curr);
     }
 
-    /*
-     * Production Rules:
+    /* Production Rules:
      *
      * <program>   ::= { <function> }
      * <function>  ::= "func" <id> "{" { <statement> } "}"
-     * <statement> ::= "dump" <expression> ";" 
-     *               | "exit" <expression> ";" 
+     * <statement> ::= "dump" <expr> ";" 
+     *               | "exit" <expr> ";" 
+     *               | "let" <id> [ "=" <expr> ] ";"
      *               | <id> "(" ")" ";"
-     *               | "if" <log_expr> "{" { <statement> } "}"
-     * <log_expr>  ::= <and_expr> { "||" <and_expr> }
+     * <expr>      ::= <id> "=" <expr> | <or_expr>
+     * <or_expr>  ::= <and_expr> { "||" <and_expr> }
      * <and_expr>  ::= <equ_expr> { "&&" <equ_expr> }
      * <equ_expr>  ::= <rel_expr> { ("==" | "~=") <rel_expr> }
      * <rel_expr>  ::= <add_expr> { ("<" | ">" | "<=" | ">=") <add_expr> }
      * <add_expr>  ::= <term> { ("+" | "-") <term> }
      * <term>      ::= <factor> { ("*" | "/") <factor> }
-     * <factor>    ::= "(" <log_expr> ")" | <unary_op> <factor> | <int>
+     * <factor>    ::= "(" <add_expr> ")" | <unary_op> <factor> | <int> | <id>
      * <unary_op>  ::= "-"
      */
 
@@ -152,6 +195,7 @@ impl ParseTree {
         let mut tok: Token = lexer.consume_token();
         match tok.kind {
             TokenType::LiteralInt => ParseNode::new_literal(tok),
+            TokenType::Identifier => ParseNode::new_var(tok),
             TokenType::OpMinus => { // Unary minus
                 let factor: ParseNode = self.parse_factor(lexer);
                 ParseNode::new_un_op(tok, factor)
@@ -194,7 +238,7 @@ impl ParseTree {
         term
     }
 
-    fn parse_log_expr(&mut self, lexer: &mut Lexer) -> ParseNode {
+    fn parse_or_expr(&mut self, lexer: &mut Lexer) -> ParseNode {
         let mut and: ParseNode = self.parse_and_expr(lexer);
         let mut tok: Token = lexer.peek_token();
         while matches!(tok.kind, TokenType::OpLogicalOr) {
@@ -288,9 +332,30 @@ impl ParseTree {
                 }
                 ParseNode::new_debug_dump(tok, expression)
             },
+            TokenType::KeywordVariableDecl => {
+                let ident_tok: Token = lexer.consume_token();
+                if ident_tok.kind != TokenType::Identifier {
+                    panic!("{} Error: Expected identifier but got `{}`", ident_tok.pos, ident_tok.val_str());
+                }
+                let mut next_tok: Token = lexer.consume_token();
+                if next_tok.kind == TokenType::End {
+                    return ParseNode::new_var_decl(ident_tok, None);
+                }
+
+                if next_tok.kind != TokenType::OpAssign {
+                    panic!("{} Error: Expected `=` or `;` but got `{}`", next_tok.pos, next_tok.val_str());
+                } 
+                let expression: ParseNode = self.parse_add_expr(lexer);
+                next_tok = lexer.consume_token();
+                if next_tok.kind != TokenType::End {
+                    panic!("{} Error: Expected `;` but got `{}`", next_tok.pos, next_tok.val_str());
+                }
+                ParseNode::new_var_decl(ident_tok, Some(expression))
+            },
             TokenType::Identifier => {
                 let mut next_tok: Token = lexer.consume_token();
                 match next_tok.kind {
+                    // Function Call
                     TokenType::OpenParen => {
                         next_tok = lexer.consume_token();
                         if next_tok.kind != TokenType::CloseParen {
@@ -298,13 +363,20 @@ impl ParseTree {
                         }
                         next_tok = lexer.consume_token();
                         if next_tok.kind != TokenType::End {
-                            panic!("{} Error: Expected `; but got `{}`", next_tok.pos, next_tok.val_str());
+                            panic!("{} Error: Expected `;` but got `{}`", next_tok.pos, next_tok.val_str());
                         }
                         ParseNode::new_func_call(tok)
                     },
-                    _ => {
-                        panic!("{} Error: Unexpected identifier `{}`", tok.pos, tok.val_str());
-                    }
+                    // Variable Assignment
+                    TokenType::OpAssign => {
+                        let expression: ParseNode = self.parse_add_expr(lexer);
+                        next_tok = lexer.consume_token();
+                        if next_tok.kind != TokenType::End {
+                            panic!("{} Error: Expected `;` but got `{}`", next_tok.pos, next_tok.val_str());
+                        }
+                        ParseNode::new_assign(tok, expression)
+                    },
+                    _ => panic!("{} Error: Expected `(` or `=` but got `{}`", next_tok.pos, next_tok.val_str()),
                 }
             },
             _ => panic!("{} Error: Unknown statement `{}`", tok.pos, tok.val_str()),

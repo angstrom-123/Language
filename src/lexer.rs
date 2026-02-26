@@ -26,6 +26,7 @@ pub enum TokenType {
     KeywordFunctionDecl,
     KeywordExit,
     KeywordDebugDump,
+    KeywordVariableDecl,
     KeywordIf,
     Identifier,
     LiteralInt,
@@ -150,13 +151,15 @@ impl Lexer {
                         let last: &u8 = lexeme.last().expect("Error: Failed to get last char in lexeme");
                         if matches!(last, b'>' | b'<' | b'=') {
                             lexeme.push(self.rune);
+                        } else {
+                            self.toks.push(Token {
+                                kind: TokenType::None,
+                                val: lexeme.clone(),
+                                pos: Pos { row: self.pos.row, col: self.pos.col - lexeme.len() },
+                            });
+                            lexeme.clear();
+                            lexeme.push(self.rune);
                         }
-                        self.toks.push(Token {
-                            kind: TokenType::None,
-                            val: lexeme.clone(),
-                            pos: Pos { row: self.pos.row, col: self.pos.col - lexeme.len() },
-                        });
-                        lexeme.clear();
                     } else {
                         lexeme.push(self.rune);
                     }
@@ -177,7 +180,33 @@ impl Lexer {
                         lexeme.push(self.rune);
                     }
                 },
+                b'A'..=b'z' | b'0'..=b'9' => {
+                    if !lexeme.is_empty() {
+                        let last: &u8 = lexeme.last().expect("Error: Failed to get last char in lexeme");
+                        if matches!(last, b'A'..=b'z' | b'0'..=b'9') {
+                            lexeme.push(self.rune);
+                        } else {
+                            self.toks.push(Token {
+                                kind: TokenType::None,
+                                val: lexeme.clone(),
+                                pos: Pos { row: self.pos.row, col: self.pos.col - lexeme.len() },
+                            });
+                            lexeme.clear();
+                            lexeme.push(self.rune);
+                        }
+                    } else {
+                        lexeme.push(self.rune);
+                    }
+                },
                 _ => {
+                    if !lexeme.is_empty() {
+                        self.toks.push(Token {
+                            kind: TokenType::None,
+                            val: lexeme.clone(),
+                            pos: Pos { row: self.pos.row, col: self.pos.col - lexeme.len() },
+                        });
+                        lexeme.clear();
+                    }
                     lexeme.push(self.rune);
                 }
             }
@@ -219,10 +248,9 @@ impl Lexer {
                     b'-' => tok.kind = TokenType::OpMinus,
                     b'*' => tok.kind = TokenType::OpMul,
                     b'/' => tok.kind = TokenType::OpDiv,
-                    b':' => tok.kind = TokenType::OpAssign,
+                    b'=' => tok.kind = TokenType::OpAssign,
                     b'(' => tok.kind = TokenType::OpenParen,
                     b')' => tok.kind = TokenType::CloseParen,
-                    b'=' => tok.kind = TokenType::OpEqual,
                     b'>' => tok.kind = TokenType::OpGreaterThan,
                     b'<' => tok.kind = TokenType::OpLessThan,
                     b'{' => tok.kind = TokenType::OpenScope,
@@ -234,6 +262,7 @@ impl Lexer {
                 }
             } else {
                 match tok.val_str().as_str() {
+                    "=="   => tok.kind = TokenType::OpEqual,
                     "~="   => tok.kind = TokenType::OpNotEqual,
                     ">="   => tok.kind = TokenType::OpGreaterEqual,
                     "<="   => tok.kind = TokenType::OpLessEqual,
@@ -243,6 +272,7 @@ impl Lexer {
                     "func" => tok.kind = TokenType::KeywordFunctionDecl,
                     "dump" => tok.kind = TokenType::KeywordDebugDump,
                     "if"   => tok.kind = TokenType::KeywordIf,
+                    "let"  => tok.kind = TokenType::KeywordVariableDecl,
                     _ => { // Then match variable contents of words
                         if tok.val.iter().all(|c| c.is_ascii_digit()) {
                             tok.kind = TokenType::LiteralInt;

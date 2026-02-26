@@ -1,16 +1,16 @@
-func my_function {
-    dump 420;
-    my_other_function();
+func my_func {
+    let c =1234;
+    dump c;
 }
 
 func main {
-    dump 2 * 3 + ((4 + 5) * 2);
-    dump 100 / 10 + 3;
-    dump 10 + -(4 + 1);
-    my_function();
-    exit 69;
-}
-
-func my_other_function {
-    dump 1234;
+    let a = 2 * 3;
+    let b = 2;
+    dump a + ((4 + 5) * b) + 2;
+    b = b + 2;
+    dump b;
+    a = a + -b;
+    dump a;
+    my_func();
+    exit 0;
 }

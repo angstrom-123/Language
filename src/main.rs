@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -61,6 +62,12 @@ fn generate_nasm_x86(out_path: String, ast: &mut ParseTree) -> std::io::Result<(
 
         writeln!(f, "; --- FuncDecl {} ---", func.tok.val_str())?;
         writeln!(f, "{}:", func.tok.val_str())?;
+        writeln!(f, "; --- Prologue {} ---", func.tok.val_str())?;
+        writeln!(f, "    push rbp")?;
+        writeln!(f, "    mov rbp, rsp")?;
+
+        let mut stack_ix: i64 = -8; // after function prologue, first slot is at stack pointer - 4
+        let mut local_vars: HashMap<Vec<u8>, i64> = HashMap::new();
 
         let mut nodes: Vec<ParseNode> = Vec::new();
         ast.post_order(func.clone(), &mut nodes);
@@ -75,6 +82,37 @@ fn generate_nasm_x86(out_path: String, ast: &mut ParseTree) -> std::io::Result<(
                     writeln!(f, "; --- Literal {} ---", node.tok.val_str())?;
                     writeln!(f, "    mov rax, {}", node.tok.val_str())?;
                     writeln!(f, "    push rax")?;
+                },
+                NodeType::Assign => {
+                    match local_vars.get(&node.tok.val) {
+                        None => panic!("{} Error: No such variable `{}` in local scope", node.tok.pos, node.tok.val_str()),
+                        Some(ofst) => {
+                            writeln!(f, "; --- Assign {} ---", node.tok.val_str())?;
+                            writeln!(f, "    pop rax")?;
+                            writeln!(f, "    mov [rbp {}], rax", ofst)?;
+                        }
+                    }
+                },
+                NodeType::VarDecl => {
+                    if local_vars.contains_key(&node.tok.val) {
+                        panic!("{} Error: Variable with this name is already declared `{}`", node.tok.pos, node.tok.val_str());
+                    }
+                    writeln!(f, "; --- VarDecl {} ---", node.tok.val_str())?;
+                    // Redundant
+                    writeln!(f, ";   pop rax")?;
+                    writeln!(f, ";   push rax")?;
+                    local_vars.insert(node.tok.val, stack_ix);
+                    stack_ix -= 8;
+                },
+                NodeType::Var => {
+                    match local_vars.get(&node.tok.val) {
+                        None => panic!("{} Error: No such variable `{}` in local scope", node.tok.pos, node.tok.val_str()),
+                        Some(ofst) => {
+                            writeln!(f, "; --- Var {} ---", node.tok.val_str())?;
+                            writeln!(f, "    mov rax, [rbp {}]", ofst)?;
+                            writeln!(f, "    push rax")?;
+                        }
+                    }
                 },
                 NodeType::Exit => {
                     writeln!(f, "; --- Exit ---")?;
@@ -219,13 +257,14 @@ fn generate_nasm_x86(out_path: String, ast: &mut ParseTree) -> std::io::Result<(
                 },
                 _ => {
                     eprintln!("Type: {:?}", node.kind);
-                    panic!("{} Error: Invalid node in statement `{}`", node.tok.pos, node.tok.val_str())
+                    panic!("{} Error: Invalid node in statement ({:?}) `{}`", node.tok.pos, node.kind, node.tok.val_str())
                 }
             }
         }
 
-        eprintln!("TODO: Remove implicit return");
-        writeln!(f, "; --- Implicit Return ---")?;
+        writeln!(f, "; --- Epilogue {} ---", func.tok.val_str())?;
+        writeln!(f, "    mov rsp, rbp")?;
+        writeln!(f, "    pop rbp")?;
         writeln!(f, "    ret")?;
     }
 
