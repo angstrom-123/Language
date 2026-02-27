@@ -1,20 +1,34 @@
 use super::*;
 
-#[test]
-fn test_compilation() {
-    let tests: [(&'static str, &'static str); 1] = [
-        ("./tests/test_arithmetic.lang", "./tests/test_arithmetic.expected"),
-    ];
-    for test in tests {
-        let src_path = test.0;
-        let exp_path = test.1;
-        let src: String = fs::read_to_string(src_path).expect("Error: Test failed to read source file");
-        let exp: String = fs::read_to_string(exp_path).expect("Error: Test failed to read expected file");
+fn run_test(src_path: &str, exp_path: &str, res_path: &str) {
+    let src: Vec<u8> = fs::read(src_path).expect("Error: Test failed to read source file");
+    let exp: Vec<u8> = fs::read(exp_path).expect("Error: Test failed to read expected file");
 
-        compile(src_path.to_string(), src.clone(), vec![]);
-        let run = Command::new("./output").output().expect("Error: Failed to run executable");
-        let stdout = String::from_utf8(run.stdout).expect("Error: Failed to convert stdout to string");
-        assert_eq!(exp, stdout, "{} Error: Unexpected Program output.\nExpected:\n{}\n\nGot:\n{}", src_path, exp, stdout);
-    }
+    compile(src, src_path.to_string(), res_path.to_string(), vec![]);
+    let run = Command::new(res_path).output().expect("Error: Failed to run executable");
+    let stdout_str: String = String::from_utf8(run.stdout.clone()).expect("Error: Failed to convert stdout to string");
+    let exp_str: String = String::from_utf8(exp.clone()).expect("Error: Failed to convert expected to string");
+    assert_eq!(exp, run.stdout, "{} Error: Unexpected Program output.\nExpected:\n{}\n\nGot:\n{}", src_path, exp_str, stdout_str);
+
+    let _ = Command::new("rm").arg(res_path).output().expect("Error: Failed to delete compiled executable");
 }
 
+#[test]
+fn test_arithmetic() {
+    run_test("./language_tests/arithmetic.lang", "./language_tests/arithmetic.expected", "./test_arithmetic");
+}
+
+#[test]
+fn test_conditional() {
+    run_test("./language_tests/conditional.lang", "./language_tests/conditional.expected", "./test_conditional");
+}
+
+#[test]
+fn test_variable() {
+    run_test("./language_tests/variable.lang", "./language_tests/variable.expected", "./test_variable");
+}
+
+#[test]
+fn test_function() {
+    run_test("./language_tests/function.lang", "./language_tests/function.expected", "./test_function");
+}

@@ -5,18 +5,28 @@ links with ld into a native executable.
 
 ## Usage
 ### Compile the Program
+Debug Build:
 ```
-cargo run <file_path> <flags>
+cargo build
 ```
-> [!NOTE}
-> Currently, compiled files are placed in the project root and named "output".
 
-| Flag         | Shorthand | Meaning               |
-| ------------ | --------- | --------------------- |
-| --parse-tree | -pt       | Print parse tree      |
-| --assembly   | -a        | Keep intermediate asm |
-| --tokens     | -t        | Print lexed tokens    |
-| --run        | -r        | Run after compiling   |
+### Run the Compiler
+```
+./<compiler_path> <file_path> <flags>
+```
+
+### Run the Tests 
+```
+cargo test
+```
+
+| Flag        | Shorthand | Argument | Meaning               |
+| ----------- | --------- | -------- | --------------------- |
+| --parse-tre | -pt       |          | Print parse tree      |
+| --assembly  | -a        |          | Keep intermediate asm |
+| --tokens    | -t        |          | Print lexed tokens    |
+| --run       | -r        |          | Run after compiling   |
+| --output    | -o        | Out Path | Specify output path   |
 
 ## Examples
 An examples folder is included with the project showcasing the language features 
@@ -25,28 +35,61 @@ should be enough to get a basic grasp on the syntax.
 
 ## Language Features
 ### Keywords
-#### Debug Dump
-Prints a number to the console for debugging.
 ```
-dump <int>;
+dump <expression>;
+
+exit <expression>;
 ```
 
-#### Exit
-Exits the program with a provided exit code.
-```
-exit <int>;
-```
-
-#### Function Declaration
-Declares a new named funcion.
+### Functions
 ```
 func <function_name> {
     <body>
 }
+
+<function_name>();
 ```
 
-#### Function Call
-Calls a previously declared funcion.
+### Local Variables
 ```
-<function_name>();
+let <variable_name>;
+
+let <variable_name> = <expression>;
+
+<variable_name> = <expression>;
+```
+
+### Conditional Statements
+```
+if <condition> {
+    <body>
+}
+
+if <condition> {
+    <body>
+} else {
+    <body>
+}
+```
+
+### Arithmetic Operators
+```
+let a;
+
+a = 1 + 1;
+
+a = 1 + 2 * 3;
+
+a = 10 / 2 * (1 + 3);
+```
+
+### Logical Operators 
+```
+if 1 == 1 {}
+
+if 1 >= 1 {}
+
+if 1 && (0 || 1) {}
+
+if 10 < 20 && 20 > 15 {}
 ```

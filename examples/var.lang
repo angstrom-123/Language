@@ -1,8 +1,0 @@
-func fn {
-    let a = 10;
-    dump a;
-}
-func main {
-    fn();
-    exit 0;
-}

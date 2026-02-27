@@ -1,16 +1,31 @@
-func my_func {
-    let c =1234;
-    dump c;
+func do_something {
+    dump 654;
+}
+
+func do_something_else {
+    dump 321;
 }
 
 func main {
-    let a = 2 * 3;
-    let b = 2;
-    dump a + ((4 + 5) * b) + 2;
-    b = b + 2;
-    dump b;
-    a = a + -b;
-    dump a;
-    my_func();
+    let a = 10;
+    let b = 20;
+
+    if a > b {
+        dump 1;
+    } else {
+        if a == 10 {
+            dump 2;
+        }
+        dump 3;
+    }
+
+    let c = 5;
+    let d = 5;
+    if c == d && c < a && c <= b {
+        do_something();
+        do_something_else();
+        dump 12345;
+    }
+
     exit 0;
 }

@@ -3,7 +3,9 @@ use std::env;
 use std::fs;
 use std::io::Write;
 use std::process::Command;
+use std::slice::Iter;
 use crate::lexer::Lexer;
+use crate::lexer::Token;
 use crate::lexer::TokenType;
 use crate::parser::NodeType;
 use crate::parser::ParseNode;
@@ -23,7 +25,250 @@ enum Flag {
     Run
 }
 
-fn generate_nasm_x86(out_path: String, ast: &mut ParseTree) -> std::io::Result<()> {
+fn generate_node_nasm_x86(f: &mut fs::File, local_vars: &mut HashMap<Vec<u8>, i64>, stack_ix: &mut i64, node: &ParseNode) -> std::io::Result<()> {
+    match node.kind {
+        NodeType::FuncCall => {
+            writeln!(f, "; --- FuncCall {} ---", node.tok.val_str())?;
+            writeln!(f, "    call {}", node.tok.val_str())?;
+        },
+        NodeType::Literal => {
+            writeln!(f, "; --- Literal {} ---", node.tok.val_str())?;
+            writeln!(f, "    mov rax, {}", node.tok.val_str())?;
+            writeln!(f, "    push rax")?;
+        },
+        NodeType::Assign => {
+            match local_vars.get(&node.tok.val) {
+                None => panic!("{} Error: No such variable `{}` in local scope", node.tok.pos, node.tok.val_str()),
+                Some(ofst) => {
+                    writeln!(f, "; --- Assign {} ---", node.tok.val_str())?;
+                    writeln!(f, "    pop rax")?;
+                    writeln!(f, "    mov [rbp {}], rax", ofst)?;
+                }
+            }
+        },
+        NodeType::VarDecl => {
+            if local_vars.contains_key(&node.tok.val) {
+                panic!("{} Error: Variable with this name is already declared `{}`", node.tok.pos, node.tok.val_str());
+            }
+            writeln!(f, "; --- VarDecl {} ---", node.tok.val_str())?;
+            // NOTE: This relies on the variable value being atop the stack already.
+            local_vars.insert(node.tok.val.clone(), *stack_ix);
+            *stack_ix -= 8;
+        },
+        NodeType::Var => {
+            match local_vars.get(&node.tok.val) {
+                None => panic!("{} Error: No such variable `{}` in local scope", node.tok.pos, node.tok.val_str()),
+                Some(ofst) => {
+                    writeln!(f, "; --- Var {} ---", node.tok.val_str())?;
+                    writeln!(f, "    mov rax, [rbp {}]", ofst)?;
+                    writeln!(f, "    push rax")?;
+                }
+            }
+        },
+        NodeType::Exit => {
+            writeln!(f, "; --- Exit ---")?;
+            writeln!(f, "    pop rdi")?;
+            writeln!(f, "    mov rax, 60")?;
+            writeln!(f, "    syscall")?;
+        },
+        NodeType::DebugDump => {
+            writeln!(f, "; --- DebugDump ---")?;
+            writeln!(f, "    pop rdi")?;
+            writeln!(f, "    call dump")?;
+        },
+        NodeType::UnOp => {
+            match node.tok.kind {
+                TokenType::OpMinus => {
+                    writeln!(f, "; --- UnOp::OpMinus ---")?;
+                    writeln!(f, "    pop rax")?;
+                    writeln!(f, "    neg rax")?;
+                    writeln!(f, "    push rax")?;
+                },
+                _ => panic!("Error: Unknown unary operator kind `{:?}`", node.tok.kind)
+            }
+        },
+        NodeType::BinOp => {
+            match node.tok.kind {
+                TokenType::OpPlus => {
+                    writeln!(f, "; --- BinOp::OpPlus ---")?;
+                    writeln!(f, "    pop rax")?;
+                    writeln!(f, "    pop rbx")?;
+                    writeln!(f, "    add rax, rbx")?;
+                    writeln!(f, "    push rax")?;
+                },
+                TokenType::OpMinus => {
+                    writeln!(f, "; --- BinOp::OpMinus---")?;
+                    writeln!(f, "    pop rbx")?;
+                    writeln!(f, "    pop rax")?;
+                    writeln!(f, "    sub rax, rbx")?;
+                    writeln!(f, "    push rax")?;
+                },
+                TokenType::OpMul => {
+                    writeln!(f, "; --- BinOp::OpMul ---")?;
+                    writeln!(f, "    pop rax")?;
+                    writeln!(f, "    pop rbx")?;
+                    writeln!(f, "    imul rax, rbx")?;
+                    writeln!(f, "    push rax")?;
+                },
+                TokenType::OpDiv => {
+                    writeln!(f, "; --- BinOp::OpDiv ---")?;
+                    writeln!(f, "    pop rcx")?;
+                    writeln!(f, "    pop rax")?;
+                    writeln!(f, "    xor rdx, rdx")?;
+                    writeln!(f, "    idiv rcx")?;
+                    writeln!(f, "    push rax")?;
+                },
+                TokenType::OpLessThan => {
+                    writeln!(f, "; --- BinOp::OpLessThan ---")?;
+                    writeln!(f, "    pop rbx")?;
+                    writeln!(f, "    pop rax")?;
+                    writeln!(f, "    cmp rax, rbx")?;
+                    writeln!(f, "    mov rax, 0")?;
+                    writeln!(f, "    setl al")?;
+                    writeln!(f, "    push rax")?;
+                },
+                TokenType::OpLessEqual => {
+                    writeln!(f, "; --- BinOp::OpLessEqual ---")?;
+                    writeln!(f, "    pop rbx")?;
+                    writeln!(f, "    pop rax")?;
+                    writeln!(f, "    cmp rax, rbx")?;
+                    writeln!(f, "    mov rax, 0")?;
+                    writeln!(f, "    setle al")?;
+                    writeln!(f, "    push rax")?;
+                },
+                TokenType::OpGreaterThan => {
+                    writeln!(f, "; --- BinOp::OpGreaterThan ---")?;
+                    writeln!(f, "    pop rbx")?;
+                    writeln!(f, "    pop rax")?;
+                    writeln!(f, "    cmp rax, rbx")?;
+                    writeln!(f, "    mov rax, 0")?;
+                    writeln!(f, "    setg al")?;
+                    writeln!(f, "    push rax")?;
+                },
+                TokenType::OpGreaterEqual => {
+                    writeln!(f, "; --- BinOp::OpGreaterEqual ---")?;
+                    writeln!(f, "    pop rbx")?;
+                    writeln!(f, "    pop rax")?;
+                    writeln!(f, "    cmp rax, rbx")?;
+                    writeln!(f, "    mov rax, 0")?;
+                    writeln!(f, "    setge al")?;
+                    writeln!(f, "    push rax")?;
+                },
+                TokenType::OpEqual => {
+                    writeln!(f, "; --- BinOp::OpEqual ---")?;
+                    writeln!(f, "    pop rbx")?;
+                    writeln!(f, "    pop rax")?;
+                    writeln!(f, "    cmp rax, rbx")?;
+                    writeln!(f, "    mov rax, 0")?;
+                    writeln!(f, "    sete al")?;
+                    writeln!(f, "    push rax")?;
+                },
+                TokenType::OpNotEqual => {
+                    writeln!(f, "; --- BinOp::OpNotEqual ---")?;
+                    writeln!(f, "    pop rbx")?;
+                    writeln!(f, "    pop rax")?;
+                    writeln!(f, "    cmp rax, rbx")?;
+                    writeln!(f, "    mov rax, 0")?;
+                    writeln!(f, "    setne al")?;
+                    writeln!(f, "    push rax")?;
+                },
+                TokenType::OpLogicalOr => {
+                    writeln!(f, "; --- BinOp::OpLogicalOr ---")?;
+                    writeln!(f, "_or_{}_{}:", node.tok.pos.col, node.tok.pos.row)?;
+                    writeln!(f, "    pop rax")?;
+                    writeln!(f, "    pop rbx")?;
+                    writeln!(f, "    cmp rax, 0")?;
+                    writeln!(f, "    je ._rhs")?;    // If lhs is false, check rhs
+                    writeln!(f, "    mov rax, 1")?;
+                    writeln!(f, "    jmp ._end")?;   // If lhs is true, short circuit
+                    writeln!(f, "._rhs:")?;
+                    writeln!(f, "    cmp rbx, 0")?;
+                    writeln!(f, "    mov rax, 0")?;
+                    writeln!(f, "    setne al")?;   // If rhs is true, set al to 1
+                    writeln!(f, "._end:")?;
+                    writeln!(f, "    push rax")?;
+                },
+                TokenType::OpLogicalAnd => {
+                    writeln!(f, "; --- BinOp::OpLogicalAnd ---")?;
+                    writeln!(f, "_and_{}_{}:", node.tok.pos.col, node.tok.pos.row)?;
+                    writeln!(f, "    pop rax")?;
+                    writeln!(f, "    pop rbx")?;
+                    writeln!(f, "    cmp rax, 0")?;
+                    writeln!(f, "    jne ._rhs")?;  // If lhs is true, check rhs
+                    writeln!(f, "    jmp ._end")?;  // If lhs is false, short circuit
+                    writeln!(f, "._rhs:")?;
+                    writeln!(f, "    cmp rbx, 0")?;
+                    writeln!(f, "    mov rax, 0")?;
+                    writeln!(f, "    setne al")?;   // If rhs is true, set al to 1
+                    writeln!(f, "._end:")?;
+                    writeln!(f, "    push rax")?;
+                },
+                _ => unimplemented!("Generating assembly for other bin ops"),
+            }
+        },
+        _ => {
+            panic!("{} Error: Invalid node in statement ({:?}) `{}`", node.tok.pos, node.kind, node.tok.val_str())
+        }
+    }
+
+    Ok(())
+}
+
+fn generate_block_item_nasm_x86(f: &mut fs::File, local_vars: &mut HashMap<Vec<u8>, i64>, stack_ix: &mut i64, block_item: &ParseNode) -> std::io::Result<()> {
+    match block_item.kind {
+        NodeType::Conditional => {
+            let tok: &Token = &block_item.tok;
+            let mut it: Iter<ParseNode> = block_item.children.iter();
+            let guard: &ParseNode = it.next().unwrap_or_else(|| panic!("{} Error: Failed to get condition in `if`", block_item.tok.pos));
+            let if_body: &ParseNode = it.next().unwrap_or_else(|| panic!("{} Error: Failed to get true branch in `if`", block_item.tok.pos));
+            let else_body: Option<&ParseNode> = it.next();
+
+            writeln!(f, "; --- Conditional ---")?;
+            for node in &guard.post_order() {
+                generate_node_nasm_x86(f, local_vars, stack_ix, node)?;
+            }
+            writeln!(f, "_if_{}_{}:", tok.pos.row, tok.pos.col)?;
+            match else_body {
+                None => {
+                    writeln!(f, "; --- If (No Else) ---")?;
+                    writeln!(f, "    pop rax")?;
+                    writeln!(f, "    cmp rax, 0")?;
+                    writeln!(f, "    je _end_{}_{}", tok.pos.row, tok.pos.col)?;
+                    for block_item in &if_body.children {
+                        generate_block_item_nasm_x86(f, local_vars, stack_ix, block_item)?;
+                    }
+                    writeln!(f, "_end_{}_{}:", tok.pos.row, tok.pos.col)?;
+                },
+                Some(else_body) => {
+                    writeln!(f, "; --- If ---")?;
+                    writeln!(f, "    pop rax")?;
+                    writeln!(f, "    cmp rax, 0")?;
+                    writeln!(f, "    je _false_{}_{}", tok.pos.row, tok.pos.col)?;
+                    for block_item in &if_body.children {
+                        generate_block_item_nasm_x86(f, local_vars, stack_ix, block_item)?;
+                    }
+                    writeln!(f, "    jmp _end_{}_{}", tok.pos.row, tok.pos.col)?;
+                    writeln!(f, "; --- Else ---")?;
+                    writeln!(f, "_false_{}_{}:", tok.pos.row, tok.pos.col)?;
+                    for block_item in &else_body.children {
+                        generate_block_item_nasm_x86(f, local_vars, stack_ix, block_item)?;
+                    }
+                    writeln!(f, "_end_{}_{}:", tok.pos.row, tok.pos.col)?;
+                }
+            }
+        },
+        NodeType::Assign | NodeType::Exit | NodeType::DebugDump | NodeType::VarDecl | NodeType::FuncCall => {
+            for node in &block_item.post_order() {
+                generate_node_nasm_x86(f, local_vars, stack_ix, node)?;
+            }
+        },
+        _ => panic!("{} Error: Expected block item but got `{}`", block_item.tok.pos, block_item.tok.val_str()),
+    }
+
+    Ok(())
+}
+
+fn generate_nasm_x86(out_path: &String, ast: &mut ParseTree) -> std::io::Result<()> {
     let mut f = fs::File::create(out_path)?;
     writeln!(f, "; --- Header ---")?;
     writeln!(f, "global _start")?;
@@ -69,197 +314,8 @@ fn generate_nasm_x86(out_path: String, ast: &mut ParseTree) -> std::io::Result<(
         let mut stack_ix: i64 = -8; // after function prologue, first slot is at stack pointer - 4
         let mut local_vars: HashMap<Vec<u8>, i64> = HashMap::new();
 
-        let mut nodes: Vec<ParseNode> = Vec::new();
-        ast.post_order(func.clone(), &mut nodes);
-        nodes.pop();
-        for node in nodes {
-            match node.kind {
-                NodeType::FuncCall => {
-                    writeln!(f, "; --- FuncCall {} ---", node.tok.val_str())?;
-                    writeln!(f, "    call {}", node.tok.val_str())?;
-                },
-                NodeType::Literal => {
-                    writeln!(f, "; --- Literal {} ---", node.tok.val_str())?;
-                    writeln!(f, "    mov rax, {}", node.tok.val_str())?;
-                    writeln!(f, "    push rax")?;
-                },
-                NodeType::Assign => {
-                    match local_vars.get(&node.tok.val) {
-                        None => panic!("{} Error: No such variable `{}` in local scope", node.tok.pos, node.tok.val_str()),
-                        Some(ofst) => {
-                            writeln!(f, "; --- Assign {} ---", node.tok.val_str())?;
-                            writeln!(f, "    pop rax")?;
-                            writeln!(f, "    mov [rbp {}], rax", ofst)?;
-                        }
-                    }
-                },
-                NodeType::VarDecl => {
-                    if local_vars.contains_key(&node.tok.val) {
-                        panic!("{} Error: Variable with this name is already declared `{}`", node.tok.pos, node.tok.val_str());
-                    }
-                    writeln!(f, "; --- VarDecl {} ---", node.tok.val_str())?;
-                    // Redundant
-                    writeln!(f, ";   pop rax")?;
-                    writeln!(f, ";   push rax")?;
-                    local_vars.insert(node.tok.val, stack_ix);
-                    stack_ix -= 8;
-                },
-                NodeType::Var => {
-                    match local_vars.get(&node.tok.val) {
-                        None => panic!("{} Error: No such variable `{}` in local scope", node.tok.pos, node.tok.val_str()),
-                        Some(ofst) => {
-                            writeln!(f, "; --- Var {} ---", node.tok.val_str())?;
-                            writeln!(f, "    mov rax, [rbp {}]", ofst)?;
-                            writeln!(f, "    push rax")?;
-                        }
-                    }
-                },
-                NodeType::Exit => {
-                    writeln!(f, "; --- Exit ---")?;
-                    writeln!(f, "    pop rdi")?;
-                    writeln!(f, "    mov rax, 60")?;
-                    writeln!(f, "    syscall")?;
-                },
-                NodeType::DebugDump => {
-                    writeln!(f, "; --- DebugDump ---")?;
-                    writeln!(f, "    pop rdi")?;
-                    writeln!(f, "    call dump")?;
-                },
-                NodeType::UnOp => {
-                    match node.tok.kind {
-                        TokenType::OpMinus => {
-                            writeln!(f, "; --- UnOp::OpMinus ---")?;
-                            writeln!(f, "    pop rax")?;
-                            writeln!(f, "    neg rax")?;
-                            writeln!(f, "    push rax")?;
-                        },
-                        _ => panic!("Error: Unknown unary operator kind `{:?}`", node.tok.kind)
-                    }
-                },
-                NodeType::BinOp => {
-                    match node.tok.kind {
-                        TokenType::OpPlus => {
-                            writeln!(f, "; --- BinOp::OpPlus ---")?;
-                            writeln!(f, "    pop rax")?;
-                            writeln!(f, "    pop rbx")?;
-                            writeln!(f, "    add rax, rbx")?;
-                            writeln!(f, "    push rax")?;
-                        },
-                        TokenType::OpMinus => {
-                            writeln!(f, "; --- BinOp::OpMinus---")?;
-                            writeln!(f, "    pop rax")?;
-                            writeln!(f, "    pop rbx")?;
-                            writeln!(f, "    sub rbx, rax")?;
-                            writeln!(f, "    push rbx")?;
-                        },
-                        TokenType::OpMul => {
-                            writeln!(f, "; --- BinOp::OpMul ---")?;
-                            writeln!(f, "    pop rax")?;
-                            writeln!(f, "    pop rbx")?;
-                            writeln!(f, "    imul rax, rbx")?;
-                            writeln!(f, "    push rax")?;
-                        },
-                        TokenType::OpDiv => {
-                            writeln!(f, "; --- BinOp::OpDiv ---")?;
-                            writeln!(f, "    pop rcx")?;
-                            writeln!(f, "    pop rax")?;
-                            writeln!(f, "    xor rdx, rdx")?;
-                            writeln!(f, "    idiv rcx")?;
-                            writeln!(f, "    push rax")?;
-                        },
-                        TokenType::OpLessThan => {
-                            writeln!(f, "; --- BinOp::OpLessThan ---")?;
-                            writeln!(f, "    pop rbx")?;
-                            writeln!(f, "    pop rax")?;
-                            writeln!(f, "    cmp rax, rbx")?;
-                            writeln!(f, "    mov rax, 0")?;
-                            writeln!(f, "    setl al")?;
-                            writeln!(f, "    push rax")?;
-                        },
-                        TokenType::OpLessEqual => {
-                            writeln!(f, "; --- BinOp::OpLessEqual ---")?;
-                            writeln!(f, "    pop rbx")?;
-                            writeln!(f, "    pop rax")?;
-                            writeln!(f, "    cmp rax, rbx")?;
-                            writeln!(f, "    mov rax, 0")?;
-                            writeln!(f, "    setle al")?;
-                            writeln!(f, "    push rax")?;
-                        },
-                        TokenType::OpGreaterThan => {
-                            writeln!(f, "; --- BinOp::OpGreaterThan ---")?;
-                            writeln!(f, "    pop rbx")?;
-                            writeln!(f, "    pop rax")?;
-                            writeln!(f, "    cmp rax, rbx")?;
-                            writeln!(f, "    mov rax, 0")?;
-                            writeln!(f, "    setg al")?;
-                            writeln!(f, "    push rax")?;
-                        },
-                        TokenType::OpGreaterEqual => {
-                            writeln!(f, "; --- BinOp::OpGreaterEqual ---")?;
-                            writeln!(f, "    pop rbx")?;
-                            writeln!(f, "    pop rax")?;
-                            writeln!(f, "    cmp rax, rbx")?;
-                            writeln!(f, "    mov rax, 0")?;
-                            writeln!(f, "    setge al")?;
-                            writeln!(f, "    push rax")?;
-                        },
-                        TokenType::OpEqual => {
-                            writeln!(f, "; --- BinOp::OpEqual ---")?;
-                            writeln!(f, "    pop rbx")?;
-                            writeln!(f, "    pop rax")?;
-                            writeln!(f, "    cmp rax, rbx")?;
-                            writeln!(f, "    mov rax, 0")?;
-                            writeln!(f, "    sete al")?;
-                            writeln!(f, "    push rax")?;
-                        },
-                        TokenType::OpNotEqual => {
-                            writeln!(f, "; --- BinOp::OpNotEqual ---")?;
-                            writeln!(f, "    pop rbx")?;
-                            writeln!(f, "    pop rax")?;
-                            writeln!(f, "    cmp rax, rbx")?;
-                            writeln!(f, "    mov rax, 0")?;
-                            writeln!(f, "    setne al")?;
-                            writeln!(f, "    push rax")?;
-                        },
-                        TokenType::OpLogicalOr => {
-                            writeln!(f, "; --- BinOp::OpLogicalOr ---")?;
-                            writeln!(f, "_or_{}_{}:", node.tok.pos.col, node.tok.pos.row)?;
-                            writeln!(f, "    pop rax")?;
-                            writeln!(f, "    pop rbx")?;
-                            writeln!(f, "    cmp rax, 0")?;
-                            writeln!(f, "    je ._rhs")?;    // If lhs is false, check rhs
-                            writeln!(f, "    mov rax, 1")?;
-                            writeln!(f, "    jmp ._end")?;   // If lhs is true, short circuit
-                            writeln!(f, "._rhs:")?;
-                            writeln!(f, "    cmp rbx, 0")?;
-                            writeln!(f, "    mov rax, 0")?;
-                            writeln!(f, "    setne al")?;   // If rhs is true, set al to 1
-                            writeln!(f, "._end:")?;
-                            writeln!(f, "    push rax")?;
-                        },
-                        TokenType::OpLogicalAnd => {
-                            writeln!(f, "; --- BinOp::OpLogicalAnd ---")?;
-                            writeln!(f, "_and_{}_{}:", node.tok.pos.col, node.tok.pos.row)?;
-                            writeln!(f, "    pop rax")?;
-                            writeln!(f, "    pop rbx")?;
-                            writeln!(f, "    cmp rax, 0")?;
-                            writeln!(f, "    jne ._rhs")?;  // If lhs is true, check rhs
-                            writeln!(f, "    jmp ._end")?;  // If lhs is false, short circuit
-                            writeln!(f, "._rhs:")?;
-                            writeln!(f, "    cmp rbx, 0")?;
-                            writeln!(f, "    mov rax, 0")?;
-                            writeln!(f, "    setne al")?;   // If rhs is true, set al to 1
-                            writeln!(f, "._end:")?;
-                            writeln!(f, "    push rax")?;
-                        },
-                        _ => unimplemented!("Generating assembly for other bin ops"),
-                    }
-                },
-                _ => {
-                    eprintln!("Type: {:?}", node.kind);
-                    panic!("{} Error: Invalid node in statement ({:?}) `{}`", node.tok.pos, node.kind, node.tok.val_str())
-                }
-            }
+        for block_item in &func.children {
+            generate_block_item_nasm_x86(&mut f, &mut local_vars, &mut stack_ix, block_item)?;
         }
 
         writeln!(f, "; --- Epilogue {} ---", func.tok.val_str())?;
@@ -278,8 +334,16 @@ fn generate_nasm_x86(out_path: String, ast: &mut ParseTree) -> std::io::Result<(
     Ok(())
 }
 
-fn compile(src_path: String, src_code: String, flags: Vec<Flag>) {
+fn compile(src_code: Vec<u8>, src_path: String, _res_path: String, flags: Vec<Flag>) {
     eprintln!("\nInfo: Compiling program");
+    let mut obj_path: String = _res_path.clone();
+    obj_path.push_str(".o");
+
+    let mut asm_path: String = _res_path.clone();
+    asm_path.push_str(".asm");
+
+    let mut res_path = _res_path.clone();
+    res_path.insert_str(0, "./");
 
     let mut lexer: Lexer = Lexer::new(src_code);
     lexer.tokenize();
@@ -299,34 +363,34 @@ fn compile(src_path: String, src_code: String, flags: Vec<Flag>) {
         eprintln!();
     }
 
-    let generate = generate_nasm_x86("output.asm".to_string(), ast);
+    let generate = generate_nasm_x86(&asm_path, ast);
     let _ = generate.inspect_err(|e| panic!("Error: Failed to generate assembly: {e}"));
 
-    eprintln!("Info: Calling `nasm -f elf64 -o output.o output.asm`");
-    let assemble = Command::new("nasm").arg("-f").arg("elf64").arg("-o").arg("output.o").arg("output.asm").output();
+    eprintln!("Info: Calling `nasm -f elf64 -o {} {}`", &obj_path, &asm_path);
+    let assemble = Command::new("nasm").arg("-f").arg("elf64").arg("-o").arg(&obj_path).arg(&asm_path).output();
     let assemble_err: String = String::from_utf8(assemble.ok().unwrap().stderr).expect("");
     if !assemble_err.is_empty() {
         panic!("\n\x1b[31mCOMPILATION FAILED (assembler) \n{}\x1b[0m", assemble_err);
     }
 
-    eprintln!("Info: Calling `ld -o output output.o`");
-    let link = Command::new("ld").arg("-o").arg("output").arg("output.o").output();
+    eprintln!("Info: Calling `ld -o {} {}`", &res_path, &obj_path);
+    let link = Command::new("ld").arg("-o").arg(&res_path).arg(&obj_path).output();
     let link_err: String = String::from_utf8(link.ok().unwrap().stderr).expect("");
     if !link_err.is_empty() {
         panic!("\n\x1b[31mCOMPILATION FAILED (linker) \n{}\x1b[0m", link_err);
     }
 
     if !flags.contains(&Flag::EmitAsm) {
-        eprintln!("Info: Calling `rm output.asm`");
-        let rm_asm = Command::new("rm").arg("output.asm").output();
+        eprintln!("Info: Calling `rm {}`", &asm_path);
+        let rm_asm = Command::new("rm").arg(&asm_path).output();
         let rm_asm_err: String = String::from_utf8(rm_asm.expect("Error: Failed to retrieve output of assembling").stderr).expect("Error: Failed to convert stderr to string");
         if !rm_asm_err.is_empty() {
             panic!("\n\x1b[31mCOMPILATION FAILED (delete intermediate .asm) \n{}\x1b[0m", rm_asm_err);
         }
     }
 
-    eprintln!("Info: Calling `rm output.o`");
-    let rm_o = Command::new("rm").arg("output.o").output();
+    eprintln!("Info: Calling `rm {}`", &obj_path);
+    let rm_o = Command::new("rm").arg(&obj_path).output();
     let rm_o_err: String = String::from_utf8(rm_o.expect("Error: Failed to retrieve result of linking").stderr).expect("Error: Failed to convert stderr to string");
     if !rm_o_err.is_empty() {
         panic!("\n\x1b[31mCOMPILATION FAILED (delete intermediate .o) \n{}\x1b[0m", rm_o_err);
@@ -335,46 +399,89 @@ fn compile(src_path: String, src_code: String, flags: Vec<Flag>) {
     eprintln!("\n\x1b[92mCOMPILATION COMPLETE\x1b[0m");
 
     if flags.contains(&Flag::Run) {
-        eprintln!("Info: Calling `./output`");
-        let run = Command::new("./output").spawn().expect("Error: Failed to run executable").wait_with_output();
+        eprintln!("Info: Calling `{}`", &res_path);
+        let run = Command::new(&res_path).spawn().expect("Error: Failed to run executable").wait_with_output();
         let status = run.expect("Error: Failed to retrieve output of running").status;
         eprintln!("Info: Exit code {}", status.code().expect("Error: Failed to retrieve exit code of executable"));
     }
 }
 
-pub fn usage(com: &str, path: &str) -> String {
+pub fn usage(com: &str) -> String {
     format!("
 \x1b[31mCOMPILATION FAILED\x1b[0m
 
 \x1b[92mUSAGE:\x1b[0m
-  {} {} \x1b[33m<flags>\x1b[0m 
+  {} \x1b[33m<input-file> <flags>\x1b[0m 
 
 \x1b[92mFLAGS:\x1b[0m
   \x1b[33m-r     --run\x1b[0m:          Run after compiling
   \x1b[33m-pt    --parse-tree\x1b[0m:   Print parse tree
   \x1b[33m-t     --tokens\x1b[0m:       Print tokens
   \x1b[33m-a     --assembly\x1b[0m:     Keep intermediate assembly
-", com, path)
+", com)
 }                  
                    
 pub fn main() {
-    let args: Vec<String> = env::args().collect();
+    // let args: Vec<String> = env::args().collect();
 
-    let mut it = args.iter();
-    let com: &String = it.next().unwrap_or_else(|| panic!("Error: Failed to read compiler name from command line arguments"));
-    let src_path: &String = it.next().unwrap_or_else(|| panic!("{}", usage(com, "\x1b[33m<file path>\x1b[0m")));
+    // TODO: make the args come in any order then make sure tests run with new name
 
     let mut flags: Vec<Flag> = Vec::new();
-    for arg in it {
+
+    let mut it = env::args();
+    let com: String = it.next().unwrap_or_else(|| panic!("Error: Failed to get command name from args"));
+    let mut out_path: Option<String> = None;
+    let mut in_path: Option<String> = None;
+    // for arg in it {
+    while let Some(arg) = it.next() {
         match arg.as_str() {
-            "-r" | "--run"         => flags.push(Flag::Run),
-            "-a" | "--assembly"    => flags.push(Flag::EmitAsm),
+            "-r" | "--run" => flags.push(Flag::Run),
+            "-a" | "--assembly" => flags.push(Flag::EmitAsm),
             "-pt" | "--parse-tree" => flags.push(Flag::EmitParseTree),
-            "-t" | "--tokens"      => flags.push(Flag::EmitTokens),
-            _ => panic!("{}", usage(com, src_path))
+            "-t" | "--tokens" => flags.push(Flag::EmitTokens),
+            "-o" | "--output" => out_path = it.next(),
+            _ => {
+                match in_path {
+                    None => in_path = Some(arg),
+                    Some(_) => panic!("{}", usage(&com)),
+                }
+            }
         }
     }
 
-    let src_code: String = fs::read_to_string(src_path).unwrap_or_else(|_| panic!("{}", usage(com, src_path)));
-    compile(src_path.to_string(), src_code, flags);
+    let mut out: String = "output".to_string();
+    if let Some(path) = out_path {
+        out = path;
+    }
+
+    match in_path {
+        None => panic!("{}", usage(&com)),
+        Some(path) => {
+            let src: Vec<u8> = fs::read(&path).unwrap_or_else(|_| panic!("{}", usage(&com)));
+            compile(src, path.to_string(), out, flags);
+        }
+    }
+
+    // let mut it = args.iter();
+    // let com: &String = it.next().unwrap_or_else(|| panic!("Error: Failed to read compiler name from command line arguments"));
+    // let src_path: &String = it.next().unwrap_or_else(|| panic!("{}", usage(com, "\x1b[33m<file path>\x1b[0m")));
+    // let res_path: &'static str = "output";
+    //
+    // let mut flags: Vec<Flag> = Vec::new();
+    // for arg in it {
+    //     match arg.as_str() {
+    //         "-r" | "--run"         => flags.push(Flag::Run),
+    //         "-a" | "--assembly"    => flags.push(Flag::EmitAsm),
+    //         "-pt" | "--parse-tree" => flags.push(Flag::EmitParseTree),
+    //         "-t" | "--tokens"      => flags.push(Flag::EmitTokens),
+    //         "-o" | "--output_path" => {
+    //             let next: &String = it.next().unwrap_or_else(|| panic!("{}", usage(com, "\x1b[33m<file path>\x1b[0m")));
+    //
+    //         },
+    //         _ => panic!("{}", usage(com, src_path))
+    //     }
+    // }
+
+    // let src_code: String = fs::read_to_string(src_path).unwrap_or_else(|_| panic!("{}", usage(com, src_path)));
+    // compile(src_path.to_string(), src_code, flags);
 }

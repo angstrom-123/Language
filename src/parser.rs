@@ -8,6 +8,7 @@ use crate::lexer::Pos;
 #[derive(PartialEq)]
 pub enum NodeType {
     Program,
+    Block,
     Exit,
     FuncDecl,
     FuncCall,
@@ -17,6 +18,7 @@ pub enum NodeType {
     DebugDump,
     BinOp,
     UnOp,
+    Conditional,
     Literal,
 }
 
@@ -35,13 +37,30 @@ impl ParseNode {
         }
     }
 
+    pub fn exclusive_post_order(&self) -> Vec<ParseNode> {
+        let mut res: Vec<ParseNode> = Vec::new();
+        for node in &self.children {
+            res.append(&mut node.post_order());
+        }
+        res
+    }
+
+    pub fn post_order(&self) -> Vec<ParseNode> {
+        let mut res: Vec<ParseNode> = Vec::new();
+        for node in &self.children {
+            res.append(&mut node.post_order());
+        }
+        res.push(self.clone());
+        res
+    }
+
     fn new_program(prog_name: String, prog: Vec<ParseNode>) -> Self {
         ParseNode {
             kind: NodeType::Program,
             tok: Token {
                 kind: TokenType::None,
                 val: prog_name.into_bytes(),
-                pos: Pos { row: usize::MAX, col: usize::MAX },
+                pos: Pos { row: usize::MAX - 1, col: usize::MAX - 1 },
             },
             children: prog
         }
@@ -125,7 +144,7 @@ impl ParseNode {
                 let init_tok: Token = Token {
                     kind: TokenType::LiteralInt,
                     val: vec![b'0'],
-                    pos: Pos { col: usize::MAX, row: usize::MAX },
+                    pos: Pos { col: usize::MAX - 1, row: usize::MAX - 1 },
                 };
                 ParseNode {
                     kind: NodeType::VarDecl,
@@ -133,11 +152,42 @@ impl ParseNode {
                     children: vec![ParseNode::new_literal(init_tok)],
                 }
             },
-            Some(n) => {
+            Some(rhs) => {
                 ParseNode {
                     kind: NodeType::VarDecl,
                     tok: ident_tok,
-                    children: vec![n],
+                    children: vec![rhs],
+                }
+            }
+        }
+    }
+
+    fn new_block(body: Vec<ParseNode>) -> Self {
+        ParseNode {
+            kind: NodeType::Block,
+            tok: Token {
+                kind: TokenType::None,
+                val: vec![],
+                pos: Pos { col: usize::MAX - 1, row: usize::MAX - 1 },
+            },
+            children: body,
+        }
+    }
+
+    fn new_conditional(tok: Token, cond: ParseNode, if_block: ParseNode, else_block: Option<ParseNode>) -> Self {
+        match else_block {
+            None => {
+                ParseNode {
+                    kind: NodeType::Conditional,
+                    tok,
+                    children: vec![cond, if_block],
+                }
+            },
+            Some(else_block) => {
+                ParseNode {
+                    kind: NodeType::Conditional,
+                    tok,
+                    children: vec![cond, if_block, else_block],
                 }
             }
         }
@@ -164,30 +214,28 @@ impl ParseTree {
         self.root.dump(0);
     }
 
-    pub fn post_order(&self, curr: ParseNode, res: &mut Vec<ParseNode>) {
-        for node in &curr.children {
-            self.post_order(node.clone(), res);
-        }
-
-        res.push(curr);
+    pub fn post_order(&self) -> Vec<ParseNode> {
+        self.root.post_order()
     }
 
     /* Production Rules:
      *
      * <program>   ::= { <function> }
-     * <function>  ::= "func" <id> "{" { <statement> } "}"
-     * <statement> ::= "dump" <expr> ";" 
-     *               | "exit" <expr> ";" 
-     *               | "let" <id> [ "=" <expr> ] ";"
+     * <function>  ::= "func" <id> "{" { <block_item> } "}"
+     * <statement> ::= "dump" <add_expr> ";" 
+     *               | "exit" <add_expr> ";" 
      *               | <id> "(" ")" ";"
-     * <expr>      ::= <id> "=" <expr> | <or_expr>
-     * <or_expr>  ::= <and_expr> { "||" <and_expr> }
+     *               | <id> "=" <add_expr> ";"
+     *               | "if" <or_expr> "{" { <statement> } "}" [ "else" "{" { <statement> } "}"
+     * <decl>      ::= "let" <id> [ "=" <add_expr> ] ";"
+     * <block_item>::= <statement> | <declaration>
+     * <or_expr>   ::= <and_expr> { "||" <and_expr> }
      * <and_expr>  ::= <equ_expr> { "&&" <equ_expr> }
      * <equ_expr>  ::= <rel_expr> { ("==" | "~=") <rel_expr> }
      * <rel_expr>  ::= <add_expr> { ("<" | ">" | "<=" | ">=") <add_expr> }
      * <add_expr>  ::= <term> { ("+" | "-") <term> }
      * <term>      ::= <factor> { ("*" | "/") <factor> }
-     * <factor>    ::= "(" <add_expr> ")" | <unary_op> <factor> | <int> | <id>
+     * <factor>    ::= "(" <or_expr> ")" | <unary_op> <factor> | <int> | <id>
      * <unary_op>  ::= "-"
      */
 
@@ -201,7 +249,7 @@ impl ParseTree {
                 ParseNode::new_un_op(tok, factor)
             },
             TokenType::OpenParen => {
-                let expression: ParseNode = self.parse_add_expr(lexer);
+                let expression: ParseNode = self.parse_or_expr(lexer);
                 tok = lexer.consume_token();
                 if tok.kind != TokenType::CloseParen {
                     panic!("{} Error: Expected `)` but got `{}`", tok.pos, tok.val_str());
@@ -305,7 +353,7 @@ impl ParseTree {
         }
         let mut body: Vec<ParseNode> = Vec::new();
         while next_tok.kind != TokenType::CloseScope {
-            body.push(self.parse_statement(lexer));
+            body.push(self.parse_block_item(lexer));
             next_tok = lexer.peek_token();
         }
 
@@ -313,9 +361,80 @@ impl ParseTree {
         ParseNode::new_func_decl(tok, body)
     }
 
+    fn parse_block_item(&mut self, lexer: &mut Lexer) -> ParseNode {
+        let tok: Token = lexer.peek_token();
+        match tok.kind {
+            TokenType::KeywordVariableDecl => self.parse_decl(lexer),
+            TokenType::KeywordIf | TokenType::KeywordExit | TokenType::KeywordDebugDump | TokenType::Identifier => self.parse_statement(lexer),
+            _ => panic!("{} Error: Expected block item but got `{}`", tok.pos, tok.val_str())
+        }
+    }
+
+    fn parse_decl(&mut self, lexer: &mut Lexer) -> ParseNode {
+        let tok: Token = lexer.consume_token();
+        if tok.kind != TokenType::KeywordVariableDecl {
+            panic!("{} Error: Expected `let` but got `{}`", tok.pos, tok.val_str());
+        }
+        let ident_tok: Token = lexer.consume_token();
+        if ident_tok.kind != TokenType::Identifier {
+            panic!("{} Error: Expected identifier but got `{}`", ident_tok.pos, ident_tok.val_str());
+        }
+        let mut next_tok: Token = lexer.consume_token();
+        if next_tok.kind == TokenType::End {
+            return ParseNode::new_var_decl(ident_tok, None);
+        }
+
+        if next_tok.kind != TokenType::OpAssign {
+            panic!("{} Error: Expected `=` or `;` but got `{}`", next_tok.pos, next_tok.val_str());
+        } 
+        let expression: ParseNode = self.parse_add_expr(lexer);
+        next_tok = lexer.consume_token();
+        if next_tok.kind != TokenType::End {
+            panic!("{} Error: Expected `;` but got `{}`", next_tok.pos, next_tok.val_str());
+        }
+        ParseNode::new_var_decl(ident_tok, Some(expression))
+    }
+
     fn parse_statement(&mut self, lexer: &mut Lexer) -> ParseNode {
         let tok: Token = lexer.consume_token();
         match tok.kind {
+            TokenType::KeywordIf => {
+                let guard: ParseNode = self.parse_or_expr(lexer);
+
+                let mut next_tok: Token = lexer.consume_token();
+                if next_tok.kind != TokenType::OpenScope {
+                    panic!("{} Error: Expected `{{` but got `{}`", next_tok.pos, next_tok.val_str());
+                }
+
+                let mut if_body: Vec<ParseNode> = Vec::new();
+                next_tok = lexer.peek_token();
+                while next_tok.kind != TokenType::CloseScope {
+                    if_body.push(self.parse_statement(lexer));
+                    next_tok = lexer.peek_token();
+                }
+                lexer.consume_token();
+
+                next_tok = lexer.peek_token();
+                if next_tok.kind != TokenType::KeywordElse {
+                    return ParseNode::new_conditional(tok, guard, ParseNode::new_block(if_body), None);
+                }
+                lexer.consume_token();
+
+                next_tok = lexer.consume_token();
+                if next_tok.kind != TokenType::OpenScope {
+                    panic!("{} Error: Expected `{{` but got `{}`", next_tok.pos, next_tok.val_str());
+                }
+
+                let mut else_body: Vec<ParseNode> = Vec::new();
+                next_tok = lexer.peek_token();
+                while next_tok.kind != TokenType::CloseScope {
+                    else_body.push(self.parse_statement(lexer));
+                    next_tok = lexer.peek_token();
+                }
+                lexer.consume_token();
+
+                ParseNode::new_conditional(tok, guard, ParseNode::new_block(if_body), Some(ParseNode::new_block(else_body)))
+            },
             TokenType::KeywordExit => {
                 let expression: ParseNode = self.parse_add_expr(lexer);
                 let next_tok: Token = lexer.consume_token();
@@ -331,26 +450,6 @@ impl ParseTree {
                     panic!("{} Error: Expected `;` but got `{}`", next_tok.pos, next_tok.val_str());
                 }
                 ParseNode::new_debug_dump(tok, expression)
-            },
-            TokenType::KeywordVariableDecl => {
-                let ident_tok: Token = lexer.consume_token();
-                if ident_tok.kind != TokenType::Identifier {
-                    panic!("{} Error: Expected identifier but got `{}`", ident_tok.pos, ident_tok.val_str());
-                }
-                let mut next_tok: Token = lexer.consume_token();
-                if next_tok.kind == TokenType::End {
-                    return ParseNode::new_var_decl(ident_tok, None);
-                }
-
-                if next_tok.kind != TokenType::OpAssign {
-                    panic!("{} Error: Expected `=` or `;` but got `{}`", next_tok.pos, next_tok.val_str());
-                } 
-                let expression: ParseNode = self.parse_add_expr(lexer);
-                next_tok = lexer.consume_token();
-                if next_tok.kind != TokenType::End {
-                    panic!("{} Error: Expected `;` but got `{}`", next_tok.pos, next_tok.val_str());
-                }
-                ParseNode::new_var_decl(ident_tok, Some(expression))
             },
             TokenType::Identifier => {
                 let mut next_tok: Token = lexer.consume_token();
@@ -379,7 +478,7 @@ impl ParseTree {
                     _ => panic!("{} Error: Expected `(` or `=` but got `{}`", next_tok.pos, next_tok.val_str()),
                 }
             },
-            _ => panic!("{} Error: Unknown statement `{}`", tok.pos, tok.val_str()),
+            _ => panic!("{} Error: Expected statement but got `{}`", tok.pos, tok.val_str()),
         }
     }
 }

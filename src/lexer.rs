@@ -28,6 +28,7 @@ pub enum TokenType {
     KeywordDebugDump,
     KeywordVariableDecl,
     KeywordIf,
+    KeywordElse,
     Identifier,
     LiteralInt,
 }
@@ -38,8 +39,9 @@ pub struct Pos {
     pub col: usize,
 }
 impl fmt::Display for Pos {
+    // NOTE: Stored row and column are indices starting from 0, whereas in files, we count from 1.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "[{}:{}]", self.row, self.col)
+        write!(f, "[{}:{}]", self.row + 1, self.col + 1)
     }
 }
 
@@ -63,13 +65,12 @@ pub struct Lexer {
     rune: u8,
 }
 impl Lexer {
-    pub fn new(src: String) -> Self {
-        let bytes = src.into_bytes();
-        let first = *bytes.first().expect("Error: Provided source file is empty");
+    pub fn new(src: Vec<u8>) -> Self {
+        let first = *src.first().expect("Error: Provided source file is empty");
         Lexer { 
             toks: Vec::new(),
             pos: Pos { row: 0, col: 0 },
-            src: bytes,
+            src,
             cur: 0,
             rune: first,
         }
@@ -135,7 +136,7 @@ impl Lexer {
                     });
                     lexeme.clear();
                 },
-                b'>' | b'<' => {
+                b'>' | b'<' | b'~' => {
                     if !lexeme.is_empty() {
                         self.toks.push(Token {
                             kind: TokenType::None,
@@ -149,7 +150,7 @@ impl Lexer {
                 b'=' => {
                     if !lexeme.is_empty() {
                         let last: &u8 = lexeme.last().expect("Error: Failed to get last char in lexeme");
-                        if matches!(last, b'>' | b'<' | b'=') {
+                        if matches!(last, b'>' | b'<' | b'=' | b'~') {
                             lexeme.push(self.rune);
                         } else {
                             self.toks.push(Token {
@@ -272,6 +273,7 @@ impl Lexer {
                     "func" => tok.kind = TokenType::KeywordFunctionDecl,
                     "dump" => tok.kind = TokenType::KeywordDebugDump,
                     "if"   => tok.kind = TokenType::KeywordIf,
+                    "else" => tok.kind = TokenType::KeywordElse,
                     "let"  => tok.kind = TokenType::KeywordVariableDecl,
                     _ => { // Then match variable contents of words
                         if tok.val.iter().all(|c| c.is_ascii_digit()) {

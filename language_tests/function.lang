@@ -1,0 +1,20 @@
+func a {
+    dump 1;
+    b();
+}
+
+func main {
+    a();
+    b();
+    c();
+}
+
+func b {
+    dump 3;
+}
+
+func c {
+    b();
+    dump 4;
+    dump 5;
+}
