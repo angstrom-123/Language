@@ -20,13 +20,13 @@ cargo build
 cargo test
 ```
 
-| Flag        | Shorthand | Argument | Meaning               |
-| ----------- | --------- | -------- | --------------------- |
-| --parse-tre | -pt       |          | Print parse tree      |
-| --assembly  | -a        |          | Keep intermediate asm |
-| --tokens    | -t        |          | Print lexed tokens    |
-| --run       | -r        |          | Run after compiling   |
-| --output    | -o        | Out Path | Specify output path   |
+| Flag         | Shorthand | Argument | Meaning               |
+| -----------  | --------- | -------- | --------------------- |
+| --parse-tree | -pt       |          | Print parse tree      |
+| --assembly   | -a        |          | Keep intermediate asm |
+| --tokens     | -t        |          | Print lexed tokens    |
+| --run        | -r        |          | Run after compiling   |
+| --output     | -o        | Out Path | Specify output path   |
 
 ## Examples
 An examples folder is included with the project showcasing the language features 
