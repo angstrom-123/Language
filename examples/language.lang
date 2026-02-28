@@ -14,7 +14,8 @@ func main {
         dump 1;
     } else {
         if a == 10 {
-            dump 2;
+            let c = 5;
+            dump c;
         }
         dump 3;
     }

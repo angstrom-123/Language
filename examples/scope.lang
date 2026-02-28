@@ -1,0 +1,16 @@
+func main {
+    let a;
+    let b = 10;
+
+    if a {
+        dump 1;
+    }
+
+    if b {
+        dump b;
+        let c = 20;
+        dump c;
+    }
+
+    exit 0;
+}

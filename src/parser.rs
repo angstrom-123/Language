@@ -409,7 +409,7 @@ impl ParseTree {
                 let mut if_body: Vec<ParseNode> = Vec::new();
                 next_tok = lexer.peek_token();
                 while next_tok.kind != TokenType::CloseScope {
-                    if_body.push(self.parse_statement(lexer));
+                    if_body.push(self.parse_block_item(lexer));
                     next_tok = lexer.peek_token();
                 }
                 lexer.consume_token();
@@ -428,7 +428,7 @@ impl ParseTree {
                 let mut else_body: Vec<ParseNode> = Vec::new();
                 next_tok = lexer.peek_token();
                 while next_tok.kind != TokenType::CloseScope {
-                    else_body.push(self.parse_statement(lexer));
+                    else_body.push(self.parse_block_item(lexer));
                     next_tok = lexer.peek_token();
                 }
                 lexer.consume_token();

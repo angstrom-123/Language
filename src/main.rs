@@ -214,6 +214,24 @@ fn generate_node_nasm_x86(f: &mut fs::File, local_vars: &mut HashMap<Vec<u8>, i6
     Ok(())
 }
 
+fn generate_block_nasm_x86(f: &mut fs::File, local_vars: &mut HashMap<Vec<u8>, i64>, stack_ix: &mut i64, block: &ParseNode) -> std::io::Result<()> {
+    let mut block_stack_ix = *stack_ix;
+    let mut block_local_vars: HashMap<Vec<u8>, i64> = HashMap::new();
+    for var in local_vars.clone() {
+        block_local_vars.insert(var.0, var.1);
+    }
+
+    for block_item in &block.children {
+        generate_block_item_nasm_x86(f, &mut block_local_vars, &mut block_stack_ix, block_item)?;
+    }
+
+    let block_var_cnt: usize = block_local_vars.len() - local_vars.len();
+    writeln!(f, "; --- Deallocate block locals ---")?;
+    writeln!(f, "    add rsp, {}", block_var_cnt * 8)?;
+
+    Ok(())
+}
+
 fn generate_block_item_nasm_x86(f: &mut fs::File, local_vars: &mut HashMap<Vec<u8>, i64>, stack_ix: &mut i64, block_item: &ParseNode) -> std::io::Result<()> {
     match block_item.kind {
         NodeType::Conditional => {
@@ -234,9 +252,10 @@ fn generate_block_item_nasm_x86(f: &mut fs::File, local_vars: &mut HashMap<Vec<u
                     writeln!(f, "    pop rax")?;
                     writeln!(f, "    cmp rax, 0")?;
                     writeln!(f, "    je _end_{}_{}", tok.pos.row, tok.pos.col)?;
-                    for block_item in &if_body.children {
-                        generate_block_item_nasm_x86(f, local_vars, stack_ix, block_item)?;
-                    }
+                    generate_block_nasm_x86(f, local_vars, stack_ix, if_body)?;
+                    // for block_item in &if_body.children {
+                    //     generate_block_item_nasm_x86(f, local_vars, stack_ix, block_item)?;
+                    // }
                     writeln!(f, "_end_{}_{}:", tok.pos.row, tok.pos.col)?;
                 },
                 Some(else_body) => {
@@ -244,15 +263,17 @@ fn generate_block_item_nasm_x86(f: &mut fs::File, local_vars: &mut HashMap<Vec<u
                     writeln!(f, "    pop rax")?;
                     writeln!(f, "    cmp rax, 0")?;
                     writeln!(f, "    je _false_{}_{}", tok.pos.row, tok.pos.col)?;
-                    for block_item in &if_body.children {
-                        generate_block_item_nasm_x86(f, local_vars, stack_ix, block_item)?;
-                    }
+                    generate_block_nasm_x86(f, local_vars, stack_ix, if_body)?;
+                    // for block_item in &if_body.children {
+                    //     generate_block_item_nasm_x86(f, local_vars, stack_ix, block_item)?;
+                    // }
                     writeln!(f, "    jmp _end_{}_{}", tok.pos.row, tok.pos.col)?;
                     writeln!(f, "; --- Else ---")?;
                     writeln!(f, "_false_{}_{}:", tok.pos.row, tok.pos.col)?;
-                    for block_item in &else_body.children {
-                        generate_block_item_nasm_x86(f, local_vars, stack_ix, block_item)?;
-                    }
+                    generate_block_nasm_x86(f, local_vars, stack_ix, else_body)?;
+                    // for block_item in &else_body.children {
+                    //     generate_block_item_nasm_x86(f, local_vars, stack_ix, block_item)?;
+                    // }
                     writeln!(f, "_end_{}_{}:", tok.pos.row, tok.pos.col)?;
                 }
             }
